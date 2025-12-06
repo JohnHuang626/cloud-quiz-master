@@ -17,7 +17,8 @@ import {
   onSnapshot, 
   serverTimestamp,
   setDoc,
-  updateDoc
+  updateDoc,
+  getDoc
 } from 'firebase/firestore';
 import { 
   getStorage, 
@@ -72,7 +73,8 @@ import {
   UserCheck,
   XCircle,
   KeyRound,
-  X
+  X,
+  Users // 新增 Users icon
 } from 'lucide-react';
 
 // --- 錯誤邊界元件 (Error Boundary) ---
@@ -257,7 +259,7 @@ function QuizApp() {
             onClick={goHome}
           >
             <BookOpen className="w-6 h-6" />
-            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v3.9</h1>
+            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v4.0</h1>
             <h1 className="text-xl font-bold tracking-wide sm:hidden">測驗大師</h1>
           </div>
           <div className="flex items-center gap-2">
@@ -537,6 +539,60 @@ function LandingPage({ questionCount, currentUser, onEnterDashboard }) {
   );
 }
 
+// --- 學生管理元件 ---
+function StudentManager() {
+    const [students, setStudents] = useState([]);
+    const [id, setId] = useState('');
+    const [name, setName] = useState('');
+    
+    useEffect(() => {
+        const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'quiz_students'), (snap) => {
+            setStudents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        });
+        return () => unsub();
+    }, []);
+
+    const addStudent = async (e) => {
+        e.preventDefault();
+        if (!id || !name) return alert('請輸入完整資料');
+        try {
+            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_students', id), { name });
+            setId(''); setName('');
+            alert('新增成功');
+        } catch (err) {
+            alert('新增失敗');
+        }
+    };
+
+    const removeStudent = async (sid) => {
+        if (window.confirm(`確定刪除 ${sid}?`)) {
+            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_students', sid));
+        }
+    };
+
+    return (
+        <div className="bg-white p-4 rounded-lg shadow">
+            <h3 className="font-bold text-lg mb-4 text-slate-700 flex items-center gap-2">
+                <Users className="w-5 h-5 text-indigo-500"/> 學生名單管理
+            </h3>
+            <form onSubmit={addStudent} className="flex gap-2 mb-4">
+                <input value={id} onChange={e=>setId(e.target.value)} className="border p-2 rounded text-sm w-1/3" placeholder="身分證字號" />
+                <input value={name} onChange={e=>setName(e.target.value)} className="border p-2 rounded text-sm flex-1" placeholder="姓名" />
+                <button type="submit" className="bg-indigo-600 text-white px-4 rounded text-sm font-bold">新增</button>
+            </form>
+            <div className="divide-y max-h-60 overflow-y-auto border rounded">
+                {students.map(s => (
+                    <div key={s.id} className="p-3 flex justify-between items-center hover:bg-slate-50">
+                        <span className="text-sm"><span className="font-mono bg-slate-100 px-1 rounded mr-2 text-slate-500">{s.id}</span> {s.name}</span>
+                        <button onClick={()=>removeStudent(s.id)} className="text-red-400 hover:text-red-600"><Trash2 className="w-4 h-4"/></button>
+                    </div>
+                ))}
+                {students.length === 0 && <div className="p-4 text-center text-slate-400 text-sm">目前無學生資料</div>}
+            </div>
+        </div>
+    );
+}
+
 function TeacherDashboard({ questions, globalSettings, userId, windowId }) {
   const [activeTab, setActiveTab] = useState('list'); 
   const [selectedSubject, setSelectedSubject] = useState('全部'); 
@@ -763,6 +819,7 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId }) {
           {[
             { id: 'list', label: '列表', icon: <FileText className="w-3 h-3 mr-1"/> },
             { id: 'add', label: editingId ? '編輯' : '新增', icon: <Plus className="w-3 h-3 mr-1"/> },
+            { id: 'students', label: '學生管理', icon: <Users className="w-3 h-3 mr-1"/> }, // 新增分頁
             { id: 'import', label: '匯入', icon: <UploadCloud className="w-3 h-3 mr-1"/> },
             { id: 'results', label: '成績', icon: <BarChart3 className="w-3 h-3 mr-1" /> }
           ].map(tab => (
@@ -842,6 +899,8 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId }) {
           </form>
         </div>
       )}
+
+      {activeTab === 'students' && <StudentManager />} {/* 學生管理 */}
 
       {activeTab === 'import' && <BulkImport userId={userId} />}
 
@@ -963,6 +1022,8 @@ function StudentDashboard({ questions, globalSettings, windowId }) {
   const [score, setScore] = useState(0);
   const [isImproved, setIsImproved] = useState(false);
   const [questionCount, setQuestionCount] = useState(0); // 新增題數選擇
+  const [studentIdInput, setStudentIdInput] = useState(''); // 新增身分證輸入
+  const [isVerifying, setIsVerifying] = useState(false); // 驗證中狀態
   
   const safeId = windowId || `student-${Math.random()}`;
 
@@ -977,8 +1038,32 @@ function StudentDashboard({ questions, globalSettings, windowId }) {
 
   const units = useMemo(() => [...new Set(questions.filter(q => q.subject === selSub).map(q => `${q.volume}|${q.unit}`))].sort(), [questions, selSub]);
 
+  // 學生登入驗證
+  const handleStudentLogin = async (e) => {
+      e.preventDefault();
+      if (!studentIdInput) return alert("請輸入身分證字號");
+      setIsVerifying(true);
+      try {
+          const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'quiz_students', studentIdInput.trim());
+          const docSnap = await getDoc(docRef);
+          
+          if (docSnap.exists()) {
+              setName(docSnap.data().name); // 設定姓名
+              alert(`歡迎, ${docSnap.data().name}`);
+          } else {
+              alert("找不到此學號，請確認輸入是否正確。");
+              setName(''); // 清除姓名以防萬一
+          }
+      } catch (err) {
+          console.error(err);
+          alert("登入驗證發生錯誤");
+      } finally {
+          setIsVerifying(false);
+      }
+  };
+
   const start = () => {
-      if (!name) return alert("請輸入姓名");
+      if (!name) return alert("請先登入");
       if (filteredQs.length === 0) return alert("無題目");
       
       // 根據選取的題數進行切片 (Random Slice)
@@ -1028,7 +1113,43 @@ function StudentDashboard({ questions, globalSettings, windowId }) {
   if (mode === 'setup') return (
       <div className="bg-white p-6 rounded-xl shadow-md space-y-4 border-t-4 border-indigo-500">
           <h2 className="font-bold text-lg">開始測驗</h2>
-          <input value={name} onChange={e=>setName(e.target.value)} className="w-full border rounded p-2" placeholder="姓名" />
+          
+          {/* 學生身分驗證區塊 */}
+          <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
+              <label className="text-sm font-bold text-slate-700 block mb-2">學生登入</label>
+              {name ? (
+                  <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center text-green-600">
+                              <CheckCircle className="w-5 h-5" />
+                          </div>
+                          <div>
+                              <div className="text-sm font-bold text-slate-800">{name}</div>
+                              <div className="text-xs text-slate-500">已登入</div>
+                          </div>
+                      </div>
+                      <button onClick={() => { setName(''); setStudentIdInput(''); }} className="text-xs text-red-500 underline">登出</button>
+                  </div>
+              ) : (
+                  <form onSubmit={handleStudentLogin} className="flex gap-2">
+                      <input 
+                          type="text" 
+                          value={studentIdInput}
+                          onChange={(e) => setStudentIdInput(e.target.value)}
+                          className="flex-1 border rounded px-3 py-2 text-sm outline-none focus:border-indigo-500"
+                          placeholder="請輸入身分證字號"
+                      />
+                      <button 
+                          type="submit" 
+                          disabled={isVerifying}
+                          className="bg-indigo-600 text-white px-4 py-2 rounded text-sm font-bold disabled:bg-slate-400"
+                      >
+                          {isVerifying ? '...' : '登入'}
+                      </button>
+                  </form>
+              )}
+          </div>
+
           <div className="flex gap-2 overflow-x-auto pb-1">
               {SUBJECTS.map(s => <button key={s} onClick={()=>setSelSub(s)} className={`px-3 py-1 rounded-full text-sm border whitespace-nowrap ${selSub===s?'bg-indigo-600 text-white':'bg-white'}`}>{s}</button>)}
           </div>
@@ -1056,7 +1177,7 @@ function StudentDashboard({ questions, globalSettings, windowId }) {
             </div>
           </div>
 
-          <button onClick={start} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold">開始作答</button>
+          <button onClick={start} disabled={!name} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold disabled:bg-slate-300">開始作答</button>
       </div>
   );
 

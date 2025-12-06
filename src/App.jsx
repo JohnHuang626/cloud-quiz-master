@@ -119,6 +119,7 @@ class ErrorBoundary extends React.Component {
 }
 
 // --- Firebase 初始化 ---
+// 請將以下的字串換成您 Firebase 後台顯示的真實資料
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
   apiKey: "AIzaSyCCy_dv6TY4cKHlXKMNYDBOl4HFgjrY_NU",
   authDomain: "quiz-master-final-v2.firebaseapp.com",
@@ -138,11 +139,8 @@ try {
   console.error("Firebase Init Error:", e);
 }
 
-// 修正：將預設 App ID 改回 cloud-quiz-master-v1，確保 Vercel 部署時能對應到正確的路徑
-const getAppId = () => {
-    if (typeof __app_id !== 'undefined') return __app_id;
-    return 'cloud-quiz-master-v1'; 
-};
+// 使用環境變數或預設 ID，確保部署後路徑正確
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'cloud-quiz-master-v1';
 
 const SUBJECTS = ["國文", "英語", "數學", "自然", "地理", "歷史", "公民", "其他"];
 const VOLUMES = ["第一冊", "第二冊", "第三冊", "第四冊", "第五冊", "第六冊", "總複習", "不分冊"];
@@ -202,7 +200,7 @@ function QuizApp() {
     const initAuth = async () => {
         try {
             if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                await signInWithCustomToken(auth, __initial_auth_token);
+                await signInWithCustomToken(auth, __initial_auth_token).catch(e => console.warn(e));
             }
             const unsubscribe = onAuthStateChanged(auth, (u) => {
                 setUser(u);
@@ -232,20 +230,19 @@ function QuizApp() {
     let unsubS = () => {};
 
     try {
-      const appId = getAppId(); 
       unsubQ = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'quiz_questions'), (snapshot) => {
         const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         const getTime = (t) => t?.toMillis ? t.toMillis() : (t?.seconds ? t.seconds * 1000 : 0);
         docs.sort((a, b) => getTime(a.createdAt) - getTime(b.createdAt));
         setQuestions(docs);
       }, (err) => {
-        console.warn("Questions sync warning (permission?):", err.code);
+        console.warn("Questions sync warning:", err.code);
       });
 
       unsubS = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_settings', 'global'), (docSnap) => {
           if (docSnap.exists()) setGlobalSettings(docSnap.data());
       }, (err) => {
-          console.warn("Settings sync warning (permission?):", err.code);
+          console.warn("Settings sync warning:", err.code);
       });
       
     } catch (err) {
@@ -282,10 +279,11 @@ function QuizApp() {
             onClick={goHome}
           >
             <BookOpen className="w-6 h-6" />
-            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v5.0</h1>
+            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v5.1</h1>
             <h1 className="text-xl font-bold tracking-wide sm:hidden">測驗大師</h1>
           </div>
           <div className="flex items-center gap-2">
+            {/* 只有老師才顯示雙視窗 */}
             {!showLanding && !user?.isAnonymous && (
                 <button 
                 onClick={() => setIsSplitScreen(!isSplitScreen)}
@@ -575,9 +573,9 @@ function StudentManager({ user }) {
     const [showBulk, setShowBulk] = useState(false);
     const [isImporting, setIsImporting] = useState(false);
     const [permissionError, setPermissionError] = useState(false);
+    const [importSubject, setImportSubject] = useState('數學'); // 修正: 加入科目選擇狀態
+    const [importVolume, setImportVolume] = useState('第一冊'); // 修正: 加入冊次選擇狀態
     
-    const appId = getAppId(); 
-
     useEffect(() => {
         if (!user) return;
         
@@ -645,7 +643,7 @@ function StudentManager({ user }) {
                     successCount++;
                 } catch (err) {
                     console.error("Import error:", err);
-                    failedLines.push(`第 ${i+1} 行: 寫入失敗 (${err.code})`);
+                    failedLines.push(`第 ${i+1} 行: 寫入失敗`);
                 }
             } else {
                 failedLines.push(`第 ${i+1} 行: 格式無法識別`);
@@ -655,7 +653,7 @@ function StudentManager({ user }) {
         setIsImporting(false);
         let msg = `匯入完成！\n成功：${successCount} 筆`;
         if (failedLines.length > 0) {
-            msg += `\n失敗：${failedLines.length} 筆\n明細：\n${failedLines.slice(0, 5).join('\n')}`;
+            msg += `\n失敗：${failedLines.length} 筆`;
         }
         alert(msg);
         if (successCount > 0) {
@@ -680,10 +678,6 @@ function StudentManager({ user }) {
                 <Users className="w-5 h-5 text-indigo-500"/> 學生名單管理
             </h3>
             
-            <div className="text-xs text-slate-500 mb-3 font-mono">
-                當前 App ID: {appId}
-            </div>
-
             {permissionError && (
                 <div className="mb-4 bg-rose-50 border border-rose-200 p-4 rounded text-rose-800 text-sm flex items-start gap-3 shadow-sm">
                     <AlertTriangle className="w-6 h-6 shrink-0 text-rose-600" />
@@ -766,7 +760,6 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user })
   const [viewingLeaderboard, setViewingLeaderboard] = useState(null); 
 
   const safeWindowId = windowId || `teacher-${Math.random()}`;
-  const appId = getAppId();
 
   const [newQuestion, setNewQuestion] = useState({
     subject: '數學',
@@ -961,6 +954,7 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user })
     }
   };
 
+  // 修正：導覽列順序調整 (列表 -> 新增 -> 匯入 -> 成績 -> 學生管理)
   return (
     <div className="space-y-4">
       <div className="bg-white p-3 rounded-lg shadow-sm flex flex-wrap items-center justify-between gap-3">
@@ -983,9 +977,9 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user })
           {[
             { id: 'list', label: '列表', icon: <FileText className="w-3 h-3 mr-1"/> },
             { id: 'add', label: editingId ? '編輯' : '新增', icon: <Plus className="w-3 h-3 mr-1"/> },
-            { id: 'students', label: '學生管理', icon: <Users className="w-3 h-3 mr-1"/> }, 
             { id: 'import', label: '匯入', icon: <UploadCloud className="w-3 h-3 mr-1"/> },
-            { id: 'results', label: '成績', icon: <BarChart3 className="w-3 h-3 mr-1" /> }
+            { id: 'results', label: '成績', icon: <BarChart3 className="w-3 h-3 mr-1" /> },
+            { id: 'students', label: '學生管理', icon: <Users className="w-3 h-3 mr-1"/> }, // 移動到最後
           ].map(tab => (
             <button 
               key={tab.id}
@@ -1066,6 +1060,7 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user })
 
       {activeTab === 'students' && <StudentManager user={user} />}
 
+      {/* 修正：將 BulkImport 參數傳遞正確，加入科目與冊次選擇 */}
       {activeTab === 'import' && <BulkImport userId={userId} />}
 
       {activeTab === 'results' && (
@@ -1144,14 +1139,24 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user })
 function BulkImport({ userId }) {
   const [text, setText] = useState('');
   const [unit, setUnit] = useState('匯入題庫');
+  const [importSubject, setImportSubject] = useState('數學'); // 新增：匯入科目
+  const [importVolume, setImportVolume] = useState('第一冊'); // 新增：匯入冊次
   const [preview, setPreview] = useState([]);
   
-  const appId = getAppId(); // 使用動態 ID
-
+  // 修正：handleParse 加入科目與冊次的處理
   const handleParse = () => {
     const parsed = text.split('\n').filter(l => l.trim()).map(line => {
       const p = line.split('|');
-      if (p.length >= 6) return { content: p[0].trim(), options: [p[1], p[2], p[3], p[4]].map(s=>s.trim()), correctIndex: parseInt(p[5])-1, unit, subject: '數學', volume: '不分冊', imageUrl: p[6]?.trim()||'', rationale: p[7]?.trim()||'' };
+      if (p.length >= 6) return { 
+          content: p[0].trim(), 
+          options: [p[1], p[2], p[3], p[4]].map(s=>s.trim()), 
+          correctIndex: parseInt(p[5])-1, 
+          unit, 
+          subject: importSubject, // 使用選擇的科目 
+          volume: importVolume,   // 使用選擇的冊次
+          imageUrl: p[6]?.trim()||'', 
+          rationale: p[7]?.trim()||'' 
+      };
       return null;
     }).filter(Boolean);
     setPreview(parsed);
@@ -1168,7 +1173,13 @@ function BulkImport({ userId }) {
 
   return (
     <div className="bg-white p-4 rounded shadow space-y-2">
-        <input value={unit} onChange={e=>setUnit(e.target.value)} className="border p-1 w-full text-sm" placeholder="單元名稱" />
+        {/* 新增：科目與冊次選擇器，與 Add 功能一致 */}
+        <div className="flex gap-2">
+            <select value={importSubject} onChange={e => setImportSubject(e.target.value)} className="border rounded p-1 text-sm w-24">{SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}</select>
+            <select value={importVolume} onChange={e => setImportVolume(e.target.value)} className="border rounded p-1 text-sm w-24">{VOLUMES.map(v => <option key={v} value={v}>{v}</option>)}</select>
+            <input value={unit} onChange={e=>setUnit(e.target.value)} className="border p-1 text-sm flex-1" placeholder="單元名稱" />
+        </div>
+
         <textarea value={text} onChange={e=>setText(e.target.value)} className="border p-1 w-full h-32 text-xs" placeholder="題目|A|B|C|D|1|img|詳解" />
         <div className="flex gap-2">
             <button onClick={handleParse} className="flex-1 bg-gray-500 text-white text-xs py-2 rounded">預覽</button>
@@ -1187,31 +1198,27 @@ function StudentDashboard({ questions, globalSettings, windowId, user }) {
   const [ans, setAns] = useState({});
   const [score, setScore] = useState(0);
   const [isImproved, setIsImproved] = useState(false);
-  const [questionCount, setQuestionCount] = useState(0); // 新增題數選擇
-  const [studentIdInput, setStudentIdInput] = useState(''); // 新增身分證輸入
-  const [isVerifying, setIsVerifying] = useState(false); // 驗證中狀態
+  const [questionCount, setQuestionCount] = useState(0); 
+  const [studentIdInput, setStudentIdInput] = useState(''); 
+  const [isVerifying, setIsVerifying] = useState(false); 
   
   const safeId = windowId || `student-${Math.random()}`;
-  const appId = getAppId(); // 使用動態 ID
 
   const filteredQs = useMemo(() => {
       return questions.filter(q => q.subject === selSub && (selUnit === 'all' || `${q.volume}|${q.unit}` === selUnit));
   }, [questions, selSub, selUnit]);
 
-  // 當題目篩選變動時，預設選取最大題數
   useEffect(() => {
       setQuestionCount(filteredQs.length);
   }, [filteredQs.length]);
 
   const units = useMemo(() => [...new Set(questions.filter(q => q.subject === selSub).map(q => `${q.volume}|${q.unit}`))].sort(), [questions, selSub]);
 
-  // 學生登入驗證
   const handleStudentLogin = async (e) => {
       e.preventDefault();
       if (!studentIdInput) return alert("請輸入身分證字號");
       setIsVerifying(true);
       
-      // 修正 ID：移除可能導致路徑錯誤的字元
       const safeSid = studentIdInput.trim().replace(/[.#$\/\[\]]/g, '_');
 
       try {
@@ -1219,11 +1226,11 @@ function StudentDashboard({ questions, globalSettings, windowId, user }) {
           const docSnap = await getDoc(docRef);
           
           if (docSnap.exists()) {
-              setName(docSnap.data().name); // 設定姓名
+              setName(docSnap.data().name); 
               alert(`歡迎, ${docSnap.data().name}`);
           } else {
               alert("找不到此學號，請確認輸入是否正確。");
-              setName(''); // 清除姓名以防萬一
+              setName(''); 
           }
       } catch (err) {
           console.error(err);
@@ -1237,12 +1244,11 @@ function StudentDashboard({ questions, globalSettings, windowId, user }) {
       if (!name) return alert("請先登入");
       if (filteredQs.length === 0) return alert("無題目");
       
-      // 根據選取的題數進行切片 (Random Slice)
       const selectedQuestions = filteredQs
-          .sort(() => 0.5 - Math.random()) // 先全域洗牌
-          .slice(0, questionCount);        // 再切出指定數量
+          .sort(() => 0.5 - Math.random()) 
+          .slice(0, questionCount);        
 
-      setQuizQs(selectedQuestions.map(shuffleQuestionOptions)); // 最後洗牌選項
+      setQuizQs(selectedQuestions.map(shuffleQuestionOptions)); 
       setAns({});
       setMode('quiz');
   };
@@ -1272,7 +1278,6 @@ function StudentDashboard({ questions, globalSettings, windowId, user }) {
       const currentUnitName = selUnit === 'all' ? `${selSub}總測驗` : selUnit;
       
       setMode('result');
-      // 簡單判斷進步 (這裡僅為 UI 示意，若需完整需 fetch 歷史紀錄)
       setIsImproved(false); 
 
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'quiz_results'), {
@@ -1285,7 +1290,6 @@ function StudentDashboard({ questions, globalSettings, windowId, user }) {
       <div className="bg-white p-6 rounded-xl shadow-md space-y-4 border-t-4 border-indigo-500">
           <h2 className="font-bold text-lg">開始測驗</h2>
           
-          {/* 學生身分驗證區塊 */}
           <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
               <label className="text-sm font-bold text-slate-700 block mb-2">學生登入</label>
               {name ? (
@@ -1329,7 +1333,6 @@ function StudentDashboard({ questions, globalSettings, windowId, user }) {
               {units.map(u => <option key={u} value={u}>{String(u).replace('|', ' - ')}</option>)}
           </select>
           
-          {/* 題數選擇滑桿 */}
           <div>
             <label className="text-sm font-medium text-slate-700 block mb-1">
               題數: <span className="font-bold text-indigo-600">{questionCount}</span> 題
@@ -1386,7 +1389,6 @@ function StudentDashboard({ questions, globalSettings, windowId, user }) {
                           <RotateCcw className="w-4 h-4" /> 重新測驗
                       </button>
                       
-                      {/* 錯題重測按鈕 */}
                       {score < 100 && (
                           <button 
                             onClick={handleRetryMistakes} 

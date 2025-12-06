@@ -139,7 +139,7 @@ try {
   console.error("Firebase Init Error:", e);
 }
 
-// 使用環境變數或預設 ID，確保部署後路徑正確
+// v5.0: 使用環境變數或預設 ID，確保部署後路徑正確
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'cloud-quiz-master-v1';
 
 const SUBJECTS = ["國文", "英語", "數學", "自然", "地理", "歷史", "公民", "其他"];
@@ -279,7 +279,7 @@ function QuizApp() {
             onClick={goHome}
           >
             <BookOpen className="w-6 h-6" />
-            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v5.1</h1>
+            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v5.2</h1>
             <h1 className="text-xl font-bold tracking-wide sm:hidden">測驗大師</h1>
           </div>
           <div className="flex items-center gap-2">
@@ -564,193 +564,6 @@ function LandingPage({ questionCount, currentUser, onEnterDashboard }) {
   );
 }
 
-// --- 學生管理元件 (具備權限防護) ---
-function StudentManager({ user }) {
-    const [students, setStudents] = useState([]);
-    const [id, setId] = useState('');
-    const [name, setName] = useState('');
-    const [bulkText, setBulkText] = useState('');
-    const [showBulk, setShowBulk] = useState(false);
-    const [isImporting, setIsImporting] = useState(false);
-    const [permissionError, setPermissionError] = useState(false);
-    const [importSubject, setImportSubject] = useState('數學'); // 修正: 加入科目選擇狀態
-    const [importVolume, setImportVolume] = useState('第一冊'); // 修正: 加入冊次選擇狀態
-    
-    useEffect(() => {
-        if (!user) return;
-        
-        const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'quiz_students'), 
-            (snap) => {
-                setStudents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-                setPermissionError(false);
-            }, 
-            (err) => {
-                console.warn("Student snapshot permission issue:", err.code);
-                if (err.code === 'permission-denied') {
-                    setPermissionError(true);
-                }
-            }
-        );
-        return () => unsub();
-    }, [user]);
-
-    const addStudent = async (e) => {
-        e.preventDefault();
-        if (!id || !name) return alert('請輸入完整資料');
-        try {
-            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_students', id), { name });
-            setId(''); setName('');
-            alert('新增成功！');
-        } catch (err) {
-            console.error(err);
-            alert('新增失敗：' + err.code);
-        }
-    };
-
-    const handleBulkImport = async () => {
-        if (!bulkText.trim()) return alert('請輸入資料');
-        setIsImporting(true);
-        
-        const rawLines = bulkText.replace(/\r\n/g, '\n').split('\n');
-        let successCount = 0;
-        let failedLines = [];
-
-        for (let i = 0; i < rawLines.length; i++) {
-            const line = rawLines[i].trim();
-            if (!line) continue; 
-
-            let sid = null;
-            let sname = null;
-
-            if (line.includes('\t')) {
-                const parts = line.split('\t');
-                sid = parts[0].trim();
-                sname = parts[1]?.trim();
-            } else if (line.includes(',')) {
-                const parts = line.split(',');
-                sid = parts[0].trim();
-                sname = parts[1]?.trim();
-            } else if (line.includes(' ')) {
-                const firstSpaceIndex = line.indexOf(' ');
-                sid = line.substring(0, firstSpaceIndex).trim();
-                sname = line.substring(firstSpaceIndex + 1).trim();
-            }
-
-            if (sid && sname) {
-                const safeSid = sid.replace(/[.#$\/\[\]]/g, '_');
-                try {
-                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_students', safeSid), { name: sname });
-                    successCount++;
-                } catch (err) {
-                    console.error("Import error:", err);
-                    failedLines.push(`第 ${i+1} 行: 寫入失敗`);
-                }
-            } else {
-                failedLines.push(`第 ${i+1} 行: 格式無法識別`);
-            }
-        }
-
-        setIsImporting(false);
-        let msg = `匯入完成！\n成功：${successCount} 筆`;
-        if (failedLines.length > 0) {
-            msg += `\n失敗：${failedLines.length} 筆`;
-        }
-        alert(msg);
-        if (successCount > 0) {
-            setBulkText('');
-            setShowBulk(false);
-        }
-    };
-
-    const removeStudent = async (sid) => {
-        if (window.confirm(`確定刪除 ${sid}?`)) {
-            try {
-                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_students', sid));
-            } catch (err) {
-                alert("刪除失敗");
-            }
-        }
-    };
-
-    return (
-        <div className="bg-white p-4 rounded-lg shadow">
-            <h3 className="font-bold text-lg mb-4 text-slate-700 flex items-center gap-2">
-                <Users className="w-5 h-5 text-indigo-500"/> 學生名單管理
-            </h3>
-            
-            {permissionError && (
-                <div className="mb-4 bg-rose-50 border border-rose-200 p-4 rounded text-rose-800 text-sm flex items-start gap-3 shadow-sm">
-                    <AlertTriangle className="w-6 h-6 shrink-0 text-rose-600" />
-                    <div>
-                        <strong>⚠️ 讀取權限受限 (Permission Denied)</strong>
-                        <p className="mt-1">無法列出目前學生名單，但您仍可嘗試新增資料。</p>
-                    </div>
-                </div>
-            )}
-
-            <div className="flex gap-2 mb-4 bg-slate-100 p-1 rounded-lg">
-                <button onClick={() => setShowBulk(false)} className={`flex-1 py-1.5 text-sm rounded-md transition font-bold ${!showBulk ? 'bg-white shadow text-indigo-700' : 'text-slate-500'}`}>單筆新增</button>
-                <button onClick={() => setShowBulk(true)} className={`flex-1 py-1.5 text-sm rounded-md transition font-bold ${showBulk ? 'bg-white shadow text-indigo-700' : 'text-slate-500'}`}>批次匯入</button>
-            </div>
-
-            {!showBulk ? (
-                <form onSubmit={addStudent} className="flex gap-2 mb-4">
-                    <input value={id} onChange={e=>setId(e.target.value)} className="border p-2 rounded text-sm w-1/3 outline-none focus:border-indigo-500" placeholder="身分證字號" />
-                    <input value={name} onChange={e=>setName(e.target.value)} className="border p-2 rounded text-sm flex-1 outline-none focus:border-indigo-500" placeholder="姓名" />
-                    <button type="submit" className="bg-indigo-600 text-white px-4 rounded text-sm font-bold hover:bg-indigo-700 transition">新增</button>
-                </form>
-            ) : (
-                <div className="mb-4">
-                    <div className="text-xs text-slate-500 mb-2 p-2 bg-slate-50 rounded border border-slate-200">
-                        <p className="font-bold mb-1">📝 支援格式 (每行一筆)：</p>
-                        <ul className="list-disc list-inside space-y-1 ml-1">
-                            <li><span className="font-mono bg-slate-200 px-1 rounded">學號 姓名</span> (空格分隔)</li>
-                            <li><span className="font-mono bg-slate-200 px-1 rounded">學號,姓名</span> (逗號分隔)</li>
-                            <li>Excel 直接複製貼上 (Tab分隔)</li>
-                        </ul>
-                    </div>
-                    <textarea 
-                        value={bulkText}
-                        onChange={e => setBulkText(e.target.value)}
-                        className="w-full h-48 border p-2 rounded text-sm font-mono mb-2 outline-none focus:border-indigo-500"
-                        placeholder="請在此貼上名單..."
-                    />
-                    <button 
-                        onClick={handleBulkImport} 
-                        disabled={isImporting}
-                        className="w-full bg-emerald-600 text-white py-2 rounded text-sm font-bold hover:bg-emerald-700 transition disabled:bg-slate-300 flex justify-center items-center gap-2"
-                    >
-                        {isImporting ? <RefreshCcw className="w-4 h-4 animate-spin"/> : <UploadCloud className="w-4 h-4"/>}
-                        {isImporting ? '處理中...' : '開始匯入'}
-                    </button>
-                </div>
-            )}
-
-            <div className="divide-y max-h-60 overflow-y-auto border rounded bg-white">
-                {students.length === 0 && !permissionError ? (
-                    <div className="p-8 text-center text-slate-400 text-sm">目前無學生資料</div>
-                ) : (
-                    students.map(s => (
-                        <div key={s.id} className="p-3 flex justify-between items-center hover:bg-slate-50 group">
-                            <span className="text-sm">
-                                <span className="font-mono bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded mr-2 font-bold">{s.id}</span> 
-                                {s.name}
-                            </span>
-                            <button onClick={()=>removeStudent(s.id)} className="text-slate-300 hover:text-red-500 p-1"><Trash2 className="w-4 h-4"/></button>
-                        </div>
-                    ))
-                )}
-                {permissionError && (
-                   <div className="p-8 text-center text-rose-300 text-sm flex flex-col items-center">
-                       <Lock className="w-8 h-8 mb-2 opacity-50" />
-                       無法顯示列表
-                   </div>
-                )}
-            </div>
-        </div>
-    );
-}
-
 function TeacherDashboard({ questions, globalSettings, userId, windowId, user }) {
   const [activeTab, setActiveTab] = useState('list'); 
   const [selectedSubject, setSelectedSubject] = useState('全部'); 
@@ -954,7 +767,93 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user })
     }
   };
 
-  // 修正：導覽列順序調整 (列表 -> 新增 -> 匯入 -> 成績 -> 學生管理)
+  const handlePrintMistakes = (result) => {
+    if (!result.mistakes || result.mistakes.length === 0) {
+      alert("此紀錄無錯題資料或全對，無法列印。");
+      return;
+    }
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+        alert("請允許彈出視窗以列印。");
+        return;
+    }
+
+    const htmlContent = `
+      <html>
+        <head>
+          <title>錯題卷 - ${result.studentName}</title>
+          <style>
+            body { font-family: sans-serif; padding: 20px; color: #333; }
+            .header { text-align: center; margin-bottom: 30px; border-bottom: 2px solid #333; padding-bottom: 10px; }
+            .question { margin-bottom: 25px; page-break-inside: avoid; border: 1px solid #eee; padding: 15px; border-radius: 8px; background: #fff; }
+            .q-content { font-weight: bold; margin-bottom: 10px; font-size: 1.1em; line-height: 1.5; }
+            .options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-left: 20px; }
+            .option { padding: 5px; }
+            .answer-section { margin-top: 15px; font-size: 0.95em; color: #555; background: #f9f9f9; padding: 10px; border-radius: 6px; border-left: 4px solid #ddd; }
+            .correct { color: #10b981; font-weight: bold; }
+            .wrong { color: #ef4444; text-decoration: line-through; }
+            .rationale { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #ccc; font-size: 0.9em; color: #444; }
+            .rationale-label { font-weight: bold; color: #d97706; }
+            img { max-width: 300px; max-height: 200px; display: block; margin: 10px 0; border: 1px solid #ddd; }
+            @media print {
+              .no-print { display: none; }
+              body { padding: 0; background: #fff; }
+              .question { border: none; border-bottom: 1px solid #ccc; border-radius: 0; }
+              .answer-section { border: 1px solid #ddd; border-left: 4px solid #999; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1>錯題複習卷</h1>
+            <p>
+              <strong>姓名：</strong>${result.studentName} &nbsp;&nbsp; 
+              <strong>單元：</strong>${result.unit} &nbsp;&nbsp; 
+              <strong>得分：</strong>${result.score}
+            </p>
+            <p style="font-size: 0.8em; color: #666;">列印時間：${new Date().toLocaleString()}</p>
+          </div>
+
+          ${result.mistakes.map((m, idx) => `
+            <div class="question">
+              <div class="q-content">
+                ${idx + 1}. ${m.content}
+              </div>
+              ${m.imageUrl ? `<img src="${m.imageUrl}" alt="題目附圖" />` : ''}
+              <div class="options">
+                ${m.options.map((opt, i) => `
+                  <div class="option">
+                    (${['A','B','C','D'][i]}) ${opt}
+                  </div>
+                `).join('')}
+              </div>
+              <div class="answer-section">
+                <div>
+                    <span>你的答案：${m.studentAnswerIndex !== undefined ? ['A','B','C','D'][m.studentAnswerIndex] : '未作答'}</span>
+                    &nbsp;&nbsp;|&nbsp;&nbsp;
+                    <span class="correct">正確答案：${['A','B','C','D'][m.correctIndex]}</span>
+                </div>
+                ${m.rationale ? `
+                    <div class="rationale">
+                        <span class="rationale-label">【詳解】</span>${m.rationale}
+                    </div>
+                ` : ''}
+              </div>
+            </div>
+          `).join('')}
+
+          <div class="no-print" style="text-align: center; margin-top: 20px;">
+            <button onclick="window.print()" style="padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #2563eb; color: white; border: none; border-radius: 5px;">列印此頁</button>
+          </div>
+        </body>
+      </html>
+    `;
+
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+  };
+
   return (
     <div className="space-y-4">
       <div className="bg-white p-3 rounded-lg shadow-sm flex flex-wrap items-center justify-between gap-3">
@@ -1058,10 +957,9 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user })
         </div>
       )}
 
-      {activeTab === 'students' && <StudentManager user={user} />}
+      {activeTab === 'students' && <StudentManager user={user} appId={appId} />}
 
-      {/* 修正：將 BulkImport 參數傳遞正確，加入科目與冊次選擇 */}
-      {activeTab === 'import' && <BulkImport userId={userId} />}
+      {activeTab === 'import' && <BulkImport userId={userId} appId={appId} />}
 
       {activeTab === 'results' && (
           <div className="bg-white rounded-lg shadow overflow-hidden p-2 space-y-2">
@@ -1092,7 +990,11 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user })
                                           <span className="text-slate-400 mx-1">|</span>
                                           <span className={r.score>=60?'text-green-600 font-bold':'text-red-500 font-bold'}>{r.score}分</span>
                                       </div>
-                                      <button onClick={() => handleDeleteResult(r.id)} className="text-slate-300 hover:text-red-500 p-1"><Trash2 className="w-3 h-3"/></button>
+                                      {/* 新增：錯題列印與刪除按鈕 */}
+                                      <div className="flex items-center gap-1">
+                                          <button onClick={() => handlePrintMistakes(r)} className="text-slate-300 hover:text-indigo-500 p-1" title="列印錯題"><Printer className="w-3 h-3"/></button>
+                                          <button onClick={() => handleDeleteResult(r.id)} className="text-slate-300 hover:text-red-500 p-1" title="刪除紀錄"><Trash2 className="w-3 h-3"/></button>
+                                      </div>
                                   </div>
                               ))}
                           </div>
@@ -1136,14 +1038,13 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user })
   );
 }
 
-function BulkImport({ userId }) {
+function BulkImport({ userId, appId }) {
   const [text, setText] = useState('');
   const [unit, setUnit] = useState('匯入題庫');
-  const [importSubject, setImportSubject] = useState('數學'); // 新增：匯入科目
-  const [importVolume, setImportVolume] = useState('第一冊'); // 新增：匯入冊次
+  const [importSubject, setImportSubject] = useState('數學'); 
+  const [importVolume, setImportVolume] = useState('第一冊'); 
   const [preview, setPreview] = useState([]);
   
-  // 修正：handleParse 加入科目與冊次的處理
   const handleParse = () => {
     const parsed = text.split('\n').filter(l => l.trim()).map(line => {
       const p = line.split('|');
@@ -1152,8 +1053,8 @@ function BulkImport({ userId }) {
           options: [p[1], p[2], p[3], p[4]].map(s=>s.trim()), 
           correctIndex: parseInt(p[5])-1, 
           unit, 
-          subject: importSubject, // 使用選擇的科目 
-          volume: importVolume,   // 使用選擇的冊次
+          subject: importSubject, 
+          volume: importVolume,   
           imageUrl: p[6]?.trim()||'', 
           rationale: p[7]?.trim()||'' 
       };
@@ -1173,7 +1074,6 @@ function BulkImport({ userId }) {
 
   return (
     <div className="bg-white p-4 rounded shadow space-y-2">
-        {/* 新增：科目與冊次選擇器，與 Add 功能一致 */}
         <div className="flex gap-2">
             <select value={importSubject} onChange={e => setImportSubject(e.target.value)} className="border rounded p-1 text-sm w-24">{SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}</select>
             <select value={importVolume} onChange={e => setImportVolume(e.target.value)} className="border rounded p-1 text-sm w-24">{VOLUMES.map(v => <option key={v} value={v}>{v}</option>)}</select>
@@ -1187,239 +1087,4 @@ function BulkImport({ userId }) {
         </div>
     </div>
   );
-}
-
-function StudentDashboard({ questions, globalSettings, windowId, user }) {
-  const [mode, setMode] = useState('setup');
-  const [selSub, setSelSub] = useState('數學');
-  const [selUnit, setSelUnit] = useState('all');
-  const [name, setName] = useState('');
-  const [quizQs, setQuizQs] = useState([]);
-  const [ans, setAns] = useState({});
-  const [score, setScore] = useState(0);
-  const [isImproved, setIsImproved] = useState(false);
-  const [questionCount, setQuestionCount] = useState(0); 
-  const [studentIdInput, setStudentIdInput] = useState(''); 
-  const [isVerifying, setIsVerifying] = useState(false); 
-  
-  const safeId = windowId || `student-${Math.random()}`;
-
-  const filteredQs = useMemo(() => {
-      return questions.filter(q => q.subject === selSub && (selUnit === 'all' || `${q.volume}|${q.unit}` === selUnit));
-  }, [questions, selSub, selUnit]);
-
-  useEffect(() => {
-      setQuestionCount(filteredQs.length);
-  }, [filteredQs.length]);
-
-  const units = useMemo(() => [...new Set(questions.filter(q => q.subject === selSub).map(q => `${q.volume}|${q.unit}`))].sort(), [questions, selSub]);
-
-  const handleStudentLogin = async (e) => {
-      e.preventDefault();
-      if (!studentIdInput) return alert("請輸入身分證字號");
-      setIsVerifying(true);
-      
-      const safeSid = studentIdInput.trim().replace(/[.#$\/\[\]]/g, '_');
-
-      try {
-          const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'quiz_students', safeSid);
-          const docSnap = await getDoc(docRef);
-          
-          if (docSnap.exists()) {
-              setName(docSnap.data().name); 
-              alert(`歡迎, ${docSnap.data().name}`);
-          } else {
-              alert("找不到此學號，請確認輸入是否正確。");
-              setName(''); 
-          }
-      } catch (err) {
-          console.error(err);
-          alert("登入驗證發生錯誤，請稍後再試");
-      } finally {
-          setIsVerifying(false);
-      }
-  };
-
-  const start = () => {
-      if (!name) return alert("請先登入");
-      if (filteredQs.length === 0) return alert("無題目");
-      
-      const selectedQuestions = filteredQs
-          .sort(() => 0.5 - Math.random()) 
-          .slice(0, questionCount);        
-
-      setQuizQs(selectedQuestions.map(shuffleQuestionOptions)); 
-      setAns({});
-      setMode('quiz');
-  };
-
-  const handleRetryMistakes = () => {
-      const wrongQuestions = quizQs.filter(q => ans[q.id] !== q.correctIndex);
-      if (wrongQuestions.length === 0) return;
-
-      const reshuffledMistakes = wrongQuestions.map(q => shuffleQuestionOptions(q));
-      
-      setQuizQs(reshuffledMistakes);
-      setAns({});
-      setScore(0);
-      setMode('quiz');
-  };
-
-  const submit = async () => {
-      let correct = 0;
-      const mistakes = [];
-      quizQs.forEach(q => {
-          const isRight = ans[q.id] === q.correctIndex;
-          if (isRight) correct++;
-          else mistakes.push({ ...q, studentAnswerIndex: ans[q.id] });
-      });
-      const finalScore = Math.round((correct / quizQs.length) * 100);
-      setScore(finalScore);
-      const currentUnitName = selUnit === 'all' ? `${selSub}總測驗` : selUnit;
-      
-      setMode('result');
-      setIsImproved(false); 
-
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'quiz_results'), {
-          studentName: name, score: finalScore, unit: currentUnitName,
-          submittedAt: serverTimestamp(), mistakes, totalQuestions: quizQs.length, correctCount: correct
-      });
-  };
-
-  if (mode === 'setup') return (
-      <div className="bg-white p-6 rounded-xl shadow-md space-y-4 border-t-4 border-indigo-500">
-          <h2 className="font-bold text-lg">開始測驗</h2>
-          
-          <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
-              <label className="text-sm font-bold text-slate-700 block mb-2">學生登入</label>
-              {name ? (
-                  <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center text-green-600">
-                              <CheckCircle className="w-5 h-5" />
-                          </div>
-                          <div>
-                              <div className="text-sm font-bold text-slate-800">{name}</div>
-                              <div className="text-xs text-slate-500">已登入</div>
-                          </div>
-                      </div>
-                      <button onClick={() => { setName(''); setStudentIdInput(''); }} className="text-xs text-red-500 underline">登出</button>
-                  </div>
-              ) : (
-                  <form onSubmit={handleStudentLogin} className="flex gap-2">
-                      <input 
-                          type="text" 
-                          value={studentIdInput}
-                          onChange={(e) => setStudentIdInput(e.target.value)}
-                          className="flex-1 border rounded px-3 py-2 text-sm outline-none focus:border-indigo-500"
-                          placeholder="請輸入身分證字號"
-                      />
-                      <button 
-                          type="submit" 
-                          disabled={isVerifying}
-                          className="bg-indigo-600 text-white px-4 py-2 rounded text-sm font-bold disabled:bg-slate-400"
-                      >
-                          {isVerifying ? '...' : '登入'}
-                      </button>
-                  </form>
-              )}
-          </div>
-
-          <div className="flex gap-2 overflow-x-auto pb-1">
-              {SUBJECTS.map(s => <button key={s} onClick={()=>setSelSub(s)} className={`px-3 py-1 rounded-full text-sm border whitespace-nowrap ${selSub===s?'bg-indigo-600 text-white':'bg-white'}`}>{s}</button>)}
-          </div>
-          <select value={selUnit} onChange={e=>setSelUnit(e.target.value)} className="w-full border rounded p-2">
-              <option value="all">全部範圍</option>
-              {units.map(u => <option key={u} value={u}>{String(u).replace('|', ' - ')}</option>)}
-          </select>
-          
-          <div>
-            <label className="text-sm font-medium text-slate-700 block mb-1">
-              題數: <span className="font-bold text-indigo-600">{questionCount}</span> 題
-            </label>
-            <input 
-              type="range" 
-              min="1" 
-              max={Math.max(1, filteredQs.length)} 
-              value={questionCount}
-              onChange={(e) => setQuestionCount(parseInt(e.target.value))}
-              className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
-            />
-            <div className="flex justify-between text-xs text-slate-400 mt-1">
-              <span>1題</span>
-              <span>{Math.max(1, filteredQs.length)}題 (全)</span>
-            </div>
-          </div>
-
-          <button onClick={start} disabled={!name} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold disabled:bg-slate-300">開始作答</button>
-      </div>
-  );
-
-  if (mode === 'quiz') return (
-      <div className="space-y-4 pb-10">
-          {quizQs.map((q, i) => (
-              <div key={q.id} className="bg-white p-4 rounded shadow">
-                  <div className="font-bold mb-2 text-lg"><span className="text-indigo-500">{i+1}.</span> {q.content}</div>
-                  {q.imageUrl && <RobustImage src={q.imageUrl} className="max-h-48 mb-2 rounded" />}
-                  <div className="space-y-2">
-                      {q.options.map((opt, idx) => (
-                          <label key={idx} className={`flex items-center gap-2 p-3 border rounded cursor-pointer ${ans[q.id]===idx?'bg-indigo-50 border-indigo-500':''}`}>
-                              <input type="radio" name={`${safeId}-q-${q.id}`} checked={ans[q.id]===idx} onChange={()=>setAns({...ans, [q.id]: idx})} className="w-4 h-4 accent-indigo-600"/>
-                              <span className="text-sm">{opt}</span>
-                          </label>
-                      ))}
-                  </div>
-              </div>
-          ))}
-          <button onClick={submit} className="w-full bg-emerald-600 text-white py-3 rounded font-bold shadow-lg">交卷</button>
-      </div>
-  );
-
-  if (mode === 'result') {
-      const showAns = score >= (globalSettings.revealThreshold || 0);
-
-      return (
-          <div className="space-y-4">
-              <div className="bg-white p-6 rounded text-center shadow">
-                  <h2 className="text-3xl font-black text-indigo-600 mb-1">{score}分</h2>
-                  <p className="text-sm text-slate-500">{name}</p>
-                  
-                  <div className="flex justify-center gap-2 mt-4">
-                      <button onClick={()=>setMode('setup')} className="px-4 py-2 bg-slate-100 rounded text-sm flex items-center gap-1 hover:bg-slate-200">
-                          <RotateCcw className="w-4 h-4" /> 重新測驗
-                      </button>
-                      
-                      {score < 100 && (
-                          <button 
-                            onClick={handleRetryMistakes} 
-                            className="px-4 py-2 bg-rose-100 text-rose-700 rounded text-sm font-bold flex items-center gap-1 hover:bg-rose-200"
-                          >
-                              <Shuffle className="w-4 h-4" /> 錯題重測
-                          </button>
-                      )}
-                  </div>
-              </div>
-
-              <div className="space-y-3">
-                  {quizQs.map((q, i) => {
-                      const isRight = ans[q.id] === q.correctIndex;
-                      return (
-                          <div key={q.id} className={`p-4 bg-white rounded border-l-4 ${isRight?'border-green-500':'border-red-500'}`}>
-                              <div className="font-bold mb-1">{i+1}. {q.content}</div>
-                              {q.imageUrl && <RobustImage src={q.imageUrl} className="h-20 mb-2 rounded" />}
-                              {!isRight && <div className="text-red-500 text-sm">你的答案: {q.options[ans[q.id]]}</div>}
-                              {showAns ? (
-                                  <div className="mt-2 text-sm bg-slate-50 p-2 rounded">
-                                      <div className="text-green-600 font-bold">正解: {q.options[q.correctIndex]}</div>
-                                      {q.rationale && <div className="text-xs text-slate-500 mt-1">{q.rationale}</div>}
-                                  </div>
-                              ) : <div className="text-xs text-slate-400 mt-1"><Lock className="w-3 h-3 inline"/> 詳解已隱藏</div>}
-                          </div>
-                      );
-                  })}
-              </div>
-          </div>
-      );
-  }
-  return null;
 }

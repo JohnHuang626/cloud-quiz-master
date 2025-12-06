@@ -261,7 +261,7 @@ function QuizApp() {
             <h1 className="text-xl font-bold tracking-wide sm:hidden">測驗大師</h1>
           </div>
           <div className="flex items-center gap-2">
-            {!showLanding && (
+            {!showLanding && !user?.isAnonymous && (
                 <button 
                 onClick={() => setIsSplitScreen(!isSplitScreen)}
                 className="flex items-center gap-1 bg-white/20 hover:bg-white/30 px-3 py-2 rounded text-sm transition border border-white/30 text-white font-bold shadow-sm"

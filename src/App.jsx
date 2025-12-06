@@ -259,7 +259,7 @@ function QuizApp() {
             onClick={goHome}
           >
             <BookOpen className="w-6 h-6" />
-            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v4.0</h1>
+            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v4.1</h1>
             <h1 className="text-xl font-bold tracking-wide sm:hidden">測驗大師</h1>
           </div>
           <div className="flex items-center gap-2">
@@ -544,6 +544,9 @@ function StudentManager() {
     const [students, setStudents] = useState([]);
     const [id, setId] = useState('');
     const [name, setName] = useState('');
+    const [bulkText, setBulkText] = useState(''); // 批次文字
+    const [showBulk, setShowBulk] = useState(false); // 切換模式
+    const [isImporting, setIsImporting] = useState(false);
     
     useEffect(() => {
         const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'quiz_students'), (snap) => {
@@ -564,6 +567,35 @@ function StudentManager() {
         }
     };
 
+    const handleBulkImport = async () => {
+        if (!bulkText.trim()) return alert('請輸入資料');
+        setIsImporting(true);
+        const lines = bulkText.split('\n');
+        let count = 0;
+        try {
+            for (const line of lines) {
+                // 支援逗號、Tab、直線、空格分隔
+                const parts = line.trim().split(/[,|\t\s]+/); 
+                if (parts.length >= 2) {
+                    const sid = parts[0].trim();
+                    const sname = parts[1].trim();
+                    if (sid && sname) {
+                        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_students', sid), { name: sname });
+                        count++;
+                    }
+                }
+            }
+            alert(`成功匯入 ${count} 筆資料`);
+            setBulkText('');
+            setShowBulk(false);
+        } catch (err) {
+            console.error(err);
+            alert('部分匯入失敗，請檢查格式');
+        } finally {
+            setIsImporting(false);
+        }
+    };
+
     const removeStudent = async (sid) => {
         if (window.confirm(`確定刪除 ${sid}?`)) {
             await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_students', sid));
@@ -575,19 +607,64 @@ function StudentManager() {
             <h3 className="font-bold text-lg mb-4 text-slate-700 flex items-center gap-2">
                 <Users className="w-5 h-5 text-indigo-500"/> 學生名單管理
             </h3>
-            <form onSubmit={addStudent} className="flex gap-2 mb-4">
-                <input value={id} onChange={e=>setId(e.target.value)} className="border p-2 rounded text-sm w-1/3" placeholder="身分證字號" />
-                <input value={name} onChange={e=>setName(e.target.value)} className="border p-2 rounded text-sm flex-1" placeholder="姓名" />
-                <button type="submit" className="bg-indigo-600 text-white px-4 rounded text-sm font-bold">新增</button>
-            </form>
-            <div className="divide-y max-h-60 overflow-y-auto border rounded">
-                {students.map(s => (
-                    <div key={s.id} className="p-3 flex justify-between items-center hover:bg-slate-50">
-                        <span className="text-sm"><span className="font-mono bg-slate-100 px-1 rounded mr-2 text-slate-500">{s.id}</span> {s.name}</span>
-                        <button onClick={()=>removeStudent(s.id)} className="text-red-400 hover:text-red-600"><Trash2 className="w-4 h-4"/></button>
+
+            <div className="flex gap-2 mb-4 bg-slate-100 p-1 rounded-lg">
+                <button 
+                    onClick={() => setShowBulk(false)} 
+                    className={`flex-1 py-1.5 text-sm rounded-md transition font-bold ${!showBulk ? 'bg-white shadow text-indigo-700' : 'text-slate-500'}`}
+                >
+                    單筆新增
+                </button>
+                <button 
+                    onClick={() => setShowBulk(true)} 
+                    className={`flex-1 py-1.5 text-sm rounded-md transition font-bold ${showBulk ? 'bg-white shadow text-indigo-700' : 'text-slate-500'}`}
+                >
+                    批次匯入
+                </button>
+            </div>
+
+            {!showBulk ? (
+                <form onSubmit={addStudent} className="flex gap-2 mb-4">
+                    <input value={id} onChange={e=>setId(e.target.value)} className="border p-2 rounded text-sm w-1/3 outline-none focus:border-indigo-500" placeholder="身分證字號" />
+                    <input value={name} onChange={e=>setName(e.target.value)} className="border p-2 rounded text-sm flex-1 outline-none focus:border-indigo-500" placeholder="姓名" />
+                    <button type="submit" className="bg-indigo-600 text-white px-4 rounded text-sm font-bold hover:bg-indigo-700 transition">新增</button>
+                </form>
+            ) : (
+                <div className="mb-4">
+                    <div className="text-xs text-slate-500 mb-2 p-2 bg-slate-50 rounded">
+                        請貼上資料，每行一筆，格式：<br/>
+                        <span className="font-mono text-indigo-600">A123456789, 王小明</span> 或 <span className="font-mono text-indigo-600">A123456789 王小明</span>
                     </div>
-                ))}
-                {students.length === 0 && <div className="p-4 text-center text-slate-400 text-sm">目前無學生資料</div>}
+                    <textarea 
+                        value={bulkText}
+                        onChange={e => setBulkText(e.target.value)}
+                        className="w-full h-32 border p-2 rounded text-sm font-mono mb-2 outline-none focus:border-indigo-500"
+                        placeholder="在此貼上名單..."
+                    />
+                    <button 
+                        onClick={handleBulkImport} 
+                        disabled={isImporting}
+                        className="w-full bg-emerald-600 text-white py-2 rounded text-sm font-bold hover:bg-emerald-700 transition disabled:bg-slate-300"
+                    >
+                        {isImporting ? '匯入中...' : '開始匯入'}
+                    </button>
+                </div>
+            )}
+
+            <div className="divide-y max-h-60 overflow-y-auto border rounded bg-white">
+                {students.length === 0 ? (
+                    <div className="p-8 text-center text-slate-400 text-sm">目前無學生資料</div>
+                ) : (
+                    students.map(s => (
+                        <div key={s.id} className="p-3 flex justify-between items-center hover:bg-slate-50 group">
+                            <span className="text-sm">
+                                <span className="font-mono bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded mr-2 font-bold">{s.id}</span> 
+                                {s.name}
+                            </span>
+                            <button onClick={()=>removeStudent(s.id)} className="text-slate-300 hover:text-red-500 p-1"><Trash2 className="w-4 h-4"/></button>
+                        </div>
+                    ))
+                )}
             </div>
         </div>
     );

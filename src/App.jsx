@@ -138,10 +138,10 @@ try {
   console.error("Firebase Init Error:", e);
 }
 
-// 修正：使用函式動態獲取 App ID，避免初始化時變數尚未準備好
+// 修正：將預設 App ID 改回 cloud-quiz-master-v1，確保 Vercel 部署時能對應到正確的路徑
 const getAppId = () => {
     if (typeof __app_id !== 'undefined') return __app_id;
-    return 'default-app-id';
+    return 'cloud-quiz-master-v1'; 
 };
 
 const SUBJECTS = ["國文", "英語", "數學", "自然", "地理", "歷史", "公民", "其他"];
@@ -232,7 +232,7 @@ function QuizApp() {
     let unsubS = () => {};
 
     try {
-      const appId = getAppId(); // 使用動態 ID
+      const appId = getAppId(); 
       unsubQ = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'quiz_questions'), (snapshot) => {
         const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         const getTime = (t) => t?.toMillis ? t.toMillis() : (t?.seconds ? t.seconds * 1000 : 0);
@@ -282,7 +282,7 @@ function QuizApp() {
             onClick={goHome}
           >
             <BookOpen className="w-6 h-6" />
-            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v4.9</h1>
+            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v5.0</h1>
             <h1 className="text-xl font-bold tracking-wide sm:hidden">測驗大師</h1>
           </div>
           <div className="flex items-center gap-2">
@@ -576,7 +576,7 @@ function StudentManager({ user }) {
     const [isImporting, setIsImporting] = useState(false);
     const [permissionError, setPermissionError] = useState(false);
     
-    const appId = getAppId(); // 使用動態获取 ID
+    const appId = getAppId(); 
 
     useEffect(() => {
         if (!user) return;
@@ -681,7 +681,7 @@ function StudentManager({ user }) {
             </h3>
             
             <div className="text-xs text-slate-500 mb-3 font-mono">
-                App ID: {appId}
+                當前 App ID: {appId}
             </div>
 
             {permissionError && (

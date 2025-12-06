@@ -74,10 +74,11 @@ import {
   XCircle,
   KeyRound,
   X,
-  Users
+  Users,
+  AlertTriangle
 } from 'lucide-react';
 
-// --- 錯誤邊界元件 (Error Boundary) ---
+// --- 錯誤邊界元件 ---
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -99,7 +100,10 @@ class ErrorBoundary extends React.Component {
           <div className="bg-white p-6 rounded-xl shadow-lg border border-red-200 text-center max-w-sm">
             <AlertCircle className="w-12 h-12 mb-4 text-red-500 mx-auto" />
             <h1 className="text-xl font-bold mb-2">應用程式遇到問題</h1>
-            <p className="mb-4 text-slate-600">這通常是因為瀏覽器的翻譯功能干擾了程式運作。</p>
+            <p className="mb-4 text-slate-600">系統發生非預期錯誤，請嘗試重新整理。</p>
+            <div className="text-xs text-left bg-slate-100 p-2 rounded mb-4 overflow-auto max-h-32">
+                {this.state.error && this.state.error.toString()}
+            </div>
             <button 
               onClick={() => window.location.reload()} 
               className="w-full px-6 py-3 bg-red-600 text-white rounded-lg font-bold shadow hover:bg-red-700 transition"
@@ -115,7 +119,7 @@ class ErrorBoundary extends React.Component {
 }
 
 // --- Firebase 初始化 ---
-const firebaseConfig = {
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
   apiKey: "AIzaSyCCy_dv6TY4cKHlXKMNYDBOl4HFgjrY_NU",
   authDomain: "quiz-master-final-v2.firebaseapp.com",
   projectId: "quiz-master-final-v2",
@@ -134,8 +138,7 @@ try {
   console.error("Firebase Init Error:", e);
 }
 
-// 修正：使用環境變數中的 appId，若無則使用預設值，避免權限路徑錯誤
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'cloud-quiz-master-v1';
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
 const SUBJECTS = ["國文", "英語", "數學", "自然", "地理", "歷史", "公民", "其他"];
 const VOLUMES = ["第一冊", "第二冊", "第三冊", "第四冊", "第五冊", "第六冊", "總複習", "不分冊"];
@@ -192,53 +195,59 @@ function QuizApp() {
       return;
     }
 
-    try {
-      const unsubscribe = onAuthStateChanged(auth, (u) => {
-        setUser(u);
-        if (u) {
-            setCurrentView('dashboard');
-        } else {
-            setCurrentView('landing');
+    const initAuth = async () => {
+        try {
+            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                await signInWithCustomToken(auth, __initial_auth_token);
+            }
+            const unsubscribe = onAuthStateChanged(auth, (u) => {
+                setUser(u);
+                if (u) {
+                    setCurrentView('dashboard');
+                } else {
+                    setCurrentView('landing');
+                }
+                setLoading(false);
+            });
+            return unsubscribe;
+        } catch (err) {
+            console.error("Auth Init Error:", err);
+            setInitError(err.message);
+            setLoading(false);
         }
-        setLoading(false);
-      }, (error) => {
-        console.error("Auth Error:", error);
-        setInitError("驗證失敗，請重整。");
-        setLoading(false);
-      });
-      return () => unsubscribe();
-    } catch (err) {
-      setInitError(err.message);
-      setLoading(false);
-    }
+    };
+
+    const unsub = initAuth();
+    return () => { if (unsub && typeof unsub === 'function') unsub(); };
   }, []);
 
   useEffect(() => {
-    // 嚴格檢查：只有當 user 和 db 都存在時才建立監聽
     if (!user || !db) return;
     
+    let unsubQ = () => {};
+    let unsubS = () => {};
+
     try {
-      const q = collection(db, 'artifacts', appId, 'public', 'data', 'quiz_questions');
-      const unsubQuestions = onSnapshot(q, (snapshot) => {
+      unsubQ = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'quiz_questions'), (snapshot) => {
         const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         const getTime = (t) => t?.toMillis ? t.toMillis() : (t?.seconds ? t.seconds * 1000 : 0);
         docs.sort((a, b) => getTime(a.createdAt) - getTime(b.createdAt));
         setQuestions(docs);
-      }, (error) => {
-        console.error("Questions Snapshot Error:", error);
+      }, (err) => {
+        console.warn("Questions sync warning (permission?):", err.code);
       });
 
-      const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'quiz_settings', 'global');
-      const unsubSettings = onSnapshot(settingsRef, (docSnap) => {
+      unsubS = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_settings', 'global'), (docSnap) => {
           if (docSnap.exists()) setGlobalSettings(docSnap.data());
-      }, (error) => {
-          console.error("Settings Snapshot Error:", error);
+      }, (err) => {
+          console.warn("Settings sync warning (permission?):", err.code);
       });
       
-      return () => { unsubQuestions(); unsubSettings(); };
     } catch (err) {
       console.error("Firestore Setup Error:", err);
     }
+
+    return () => { unsubQ(); unsubS(); };
   }, [user]);
 
   const goHome = () => setCurrentView('landing');
@@ -268,7 +277,7 @@ function QuizApp() {
             onClick={goHome}
           >
             <BookOpen className="w-6 h-6" />
-            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v4.4</h1>
+            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v4.8</h1>
             <h1 className="text-xl font-bold tracking-wide sm:hidden">測驗大師</h1>
           </div>
           <div className="flex items-center gap-2">
@@ -421,8 +430,12 @@ function LandingPage({ questionCount, currentUser, onEnterDashboard }) {
       } else {
           try {
               setIsLoggingIn(true);
-              if (currentUser) await signOut(auth);
-              await signInAnonymously(auth);
+              if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                  await signInWithCustomToken(auth, __initial_auth_token);
+              } else {
+                  if (currentUser) await signOut(auth);
+                  await signInAnonymously(auth);
+              }
           } catch (error) {
               console.error("Student login failed", error);
               alert("登入失敗: " + error.message);
@@ -548,7 +561,7 @@ function LandingPage({ questionCount, currentUser, onEnterDashboard }) {
   );
 }
 
-// --- 學生管理元件 ---
+// --- 學生管理元件 (具備權限防護) ---
 function StudentManager({ user }) {
     const [students, setStudents] = useState([]);
     const [id, setId] = useState('');
@@ -556,12 +569,23 @@ function StudentManager({ user }) {
     const [bulkText, setBulkText] = useState('');
     const [showBulk, setShowBulk] = useState(false);
     const [isImporting, setIsImporting] = useState(false);
+    const [permissionError, setPermissionError] = useState(false);
     
     useEffect(() => {
         if (!user) return;
-        const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'quiz_students'), (snap) => {
-            setStudents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-        }, (err) => console.error("Student snapshot error", err));
+        
+        const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'quiz_students'), 
+            (snap) => {
+                setStudents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                setPermissionError(false);
+            }, 
+            (err) => {
+                console.warn("Student snapshot permission issue:", err.code);
+                if (err.code === 'permission-denied') {
+                    setPermissionError(true);
+                }
+            }
+        );
         return () => unsub();
     }, [user]);
 
@@ -571,9 +595,10 @@ function StudentManager({ user }) {
         try {
             await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_students', id), { name });
             setId(''); setName('');
-            alert('新增成功');
+            alert('新增成功！');
         } catch (err) {
-            alert('新增失敗');
+            console.error(err);
+            alert('新增失敗：' + err.code);
         }
     };
 
@@ -613,18 +638,17 @@ function StudentManager({ user }) {
                     successCount++;
                 } catch (err) {
                     console.error("Import error:", err);
-                    failedLines.push(`第 ${i+1} 行 (${line}): 資料庫寫入失敗`);
+                    failedLines.push(`第 ${i+1} 行: 寫入失敗 (${err.code})`);
                 }
             } else {
-                failedLines.push(`第 ${i+1} 行 (${line}): 格式無法識別`);
+                failedLines.push(`第 ${i+1} 行: 格式無法識別`);
             }
         }
 
         setIsImporting(false);
         let msg = `匯入完成！\n成功：${successCount} 筆`;
         if (failedLines.length > 0) {
-            msg += `\n失敗：${failedLines.length} 筆\n\n失敗明細 (前5筆)：\n${failedLines.slice(0, 5).join('\n')}`;
-            if (failedLines.length > 5) msg += '\n...等';
+            msg += `\n失敗：${failedLines.length} 筆\n明細：\n${failedLines.slice(0, 5).join('\n')}`;
         }
         alert(msg);
         if (successCount > 0) {
@@ -635,7 +659,11 @@ function StudentManager({ user }) {
 
     const removeStudent = async (sid) => {
         if (window.confirm(`確定刪除 ${sid}?`)) {
-            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_students', sid));
+            try {
+                await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_students', sid));
+            } catch (err) {
+                alert("刪除失敗");
+            }
         }
     };
 
@@ -644,6 +672,20 @@ function StudentManager({ user }) {
             <h3 className="font-bold text-lg mb-4 text-slate-700 flex items-center gap-2">
                 <Users className="w-5 h-5 text-indigo-500"/> 學生名單管理
             </h3>
+            
+            <div className="text-xs text-slate-500 mb-3 font-mono">
+                App ID: {appId}
+            </div>
+
+            {permissionError && (
+                <div className="mb-4 bg-rose-50 border border-rose-200 p-4 rounded text-rose-800 text-sm flex items-start gap-3 shadow-sm">
+                    <AlertTriangle className="w-6 h-6 shrink-0 text-rose-600" />
+                    <div>
+                        <strong>⚠️ 讀取權限受限 (Permission Denied)</strong>
+                        <p className="mt-1">無法列出目前學生名單，但您仍可嘗試新增資料。</p>
+                    </div>
+                </div>
+            )}
 
             <div className="flex gap-2 mb-4 bg-slate-100 p-1 rounded-lg">
                 <button onClick={() => setShowBulk(false)} className={`flex-1 py-1.5 text-sm rounded-md transition font-bold ${!showBulk ? 'bg-white shadow text-indigo-700' : 'text-slate-500'}`}>單筆新增</button>
@@ -684,7 +726,7 @@ function StudentManager({ user }) {
             )}
 
             <div className="divide-y max-h-60 overflow-y-auto border rounded bg-white">
-                {students.length === 0 ? (
+                {students.length === 0 && !permissionError ? (
                     <div className="p-8 text-center text-slate-400 text-sm">目前無學生資料</div>
                 ) : (
                     students.map(s => (
@@ -696,6 +738,12 @@ function StudentManager({ user }) {
                             <button onClick={()=>removeStudent(s.id)} className="text-slate-300 hover:text-red-500 p-1"><Trash2 className="w-4 h-4"/></button>
                         </div>
                     ))
+                )}
+                {permissionError && (
+                   <div className="p-8 text-center text-rose-300 text-sm flex flex-col items-center">
+                       <Lock className="w-8 h-8 mb-2 opacity-50" />
+                       無法顯示列表
+                   </div>
                 )}
             </div>
         </div>
@@ -735,7 +783,7 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user })
             const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             docs.sort((a, b) => (b.submittedAt?.seconds || 0) - (a.submittedAt?.seconds || 0));
             setResults(docs);
-        }, (err) => console.error("Results snapshot error", err));
+        }, (err) => console.warn("Results snapshot warning", err.code));
         return () => unsubscribe();
     }
   }, [activeTab, user]);

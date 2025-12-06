@@ -257,7 +257,7 @@ function QuizApp() {
             onClick={goHome}
           >
             <BookOpen className="w-6 h-6" />
-            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v3.8</h1>
+            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v3.9</h1>
             <h1 className="text-xl font-bold tracking-wide sm:hidden">測驗大師</h1>
           </div>
           <div className="flex items-center gap-2">
@@ -961,8 +961,8 @@ function StudentDashboard({ questions, globalSettings, windowId }) {
   const [quizQs, setQuizQs] = useState([]);
   const [ans, setAns] = useState({});
   const [score, setScore] = useState(0);
-  const [currentAttempt, setCurrentAttempt] = useState(1);
   const [isImproved, setIsImproved] = useState(false);
+  const [questionCount, setQuestionCount] = useState(0); // 新增題數選擇
   
   const safeId = windowId || `student-${Math.random()}`;
 
@@ -970,14 +970,36 @@ function StudentDashboard({ questions, globalSettings, windowId }) {
       return questions.filter(q => q.subject === selSub && (selUnit === 'all' || `${q.volume}|${q.unit}` === selUnit));
   }, [questions, selSub, selUnit]);
 
-  // FIX: String cast added
+  // 當題目篩選變動時，預設選取最大題數
+  useEffect(() => {
+      setQuestionCount(filteredQs.length);
+  }, [filteredQs.length]);
+
   const units = useMemo(() => [...new Set(questions.filter(q => q.subject === selSub).map(q => `${q.volume}|${q.unit}`))].sort(), [questions, selSub]);
 
   const start = () => {
       if (!name) return alert("請輸入姓名");
       if (filteredQs.length === 0) return alert("無題目");
-      setQuizQs(filteredQs.sort(() => 0.5 - Math.random()).map(shuffleQuestionOptions));
+      
+      // 根據選取的題數進行切片 (Random Slice)
+      const selectedQuestions = filteredQs
+          .sort(() => 0.5 - Math.random()) // 先全域洗牌
+          .slice(0, questionCount);        // 再切出指定數量
+
+      setQuizQs(selectedQuestions.map(shuffleQuestionOptions)); // 最後洗牌選項
       setAns({});
+      setMode('quiz');
+  };
+
+  const handleRetryMistakes = () => {
+      const wrongQuestions = quizQs.filter(q => ans[q.id] !== q.correctIndex);
+      if (wrongQuestions.length === 0) return;
+
+      const reshuffledMistakes = wrongQuestions.map(q => shuffleQuestionOptions(q));
+      
+      setQuizQs(reshuffledMistakes);
+      setAns({});
+      setScore(0);
       setMode('quiz');
   };
 
@@ -993,11 +1015,9 @@ function StudentDashboard({ questions, globalSettings, windowId }) {
       setScore(finalScore);
       const currentUnitName = selUnit === 'all' ? `${selSub}總測驗` : selUnit;
       
-      // 這裡不需再計算排名，只負責上傳
       setMode('result');
-      
-      // 若需要知道是否進步，這裡仍需查詢自己的歷史紀錄 (省略以簡化，或可單獨查詢)
-      setIsImproved(false); // 暫時關閉進步提示，或需額外 fetch 個人紀錄
+      // 簡單判斷進步 (這裡僅為 UI 示意，若需完整需 fetch 歷史紀錄)
+      setIsImproved(false); 
 
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'quiz_results'), {
           studentName: name, score: finalScore, unit: currentUnitName,
@@ -1016,7 +1036,26 @@ function StudentDashboard({ questions, globalSettings, windowId }) {
               <option value="all">全部範圍</option>
               {units.map(u => <option key={u} value={u}>{String(u).replace('|', ' - ')}</option>)}
           </select>
-          <div className="text-sm text-slate-500 text-center">共 {filteredQs.length} 題</div>
+          
+          {/* 題數選擇滑桿 */}
+          <div>
+            <label className="text-sm font-medium text-slate-700 block mb-1">
+              題數: <span className="font-bold text-indigo-600">{questionCount}</span> 題
+            </label>
+            <input 
+              type="range" 
+              min="1" 
+              max={Math.max(1, filteredQs.length)} 
+              value={questionCount}
+              onChange={(e) => setQuestionCount(parseInt(e.target.value))}
+              className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+            />
+            <div className="flex justify-between text-xs text-slate-400 mt-1">
+              <span>1題</span>
+              <span>{Math.max(1, filteredQs.length)}題 (全)</span>
+            </div>
+          </div>
+
           <button onClick={start} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold">開始作答</button>
       </div>
   );
@@ -1049,10 +1088,23 @@ function StudentDashboard({ questions, globalSettings, windowId }) {
               <div className="bg-white p-6 rounded text-center shadow">
                   <h2 className="text-3xl font-black text-indigo-600 mb-1">{score}分</h2>
                   <p className="text-sm text-slate-500">{name}</p>
-                  <button onClick={()=>setMode('setup')} className="mt-4 px-4 py-2 bg-slate-100 rounded text-sm">重新測驗</button>
+                  
+                  <div className="flex justify-center gap-2 mt-4">
+                      <button onClick={()=>setMode('setup')} className="px-4 py-2 bg-slate-100 rounded text-sm flex items-center gap-1 hover:bg-slate-200">
+                          <RotateCcw className="w-4 h-4" /> 重新測驗
+                      </button>
+                      
+                      {/* 錯題重測按鈕 */}
+                      {score < 100 && (
+                          <button 
+                            onClick={handleRetryMistakes} 
+                            className="px-4 py-2 bg-rose-100 text-rose-700 rounded text-sm font-bold flex items-center gap-1 hover:bg-rose-200"
+                          >
+                              <Shuffle className="w-4 h-4" /> 錯題重測
+                          </button>
+                      )}
+                  </div>
               </div>
-
-              {/* 學生端已移除排行榜 */}
 
               <div className="space-y-3">
                   {quizQs.map((q, i) => {

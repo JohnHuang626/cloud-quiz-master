@@ -74,7 +74,7 @@ import {
   XCircle,
   KeyRound,
   X,
-  Users // 新增 Users icon
+  Users
 } from 'lucide-react';
 
 // --- 錯誤邊界元件 (Error Boundary) ---
@@ -134,7 +134,8 @@ try {
   console.error("Firebase Init Error:", e);
 }
 
-const appId = 'cloud-quiz-master-v1'; 
+// 修正：使用環境變數中的 appId，若無則使用預設值，避免權限路徑錯誤
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'cloud-quiz-master-v1';
 
 const SUBJECTS = ["國文", "英語", "數學", "自然", "地理", "歷史", "公民", "其他"];
 const VOLUMES = ["第一冊", "第二冊", "第三冊", "第四冊", "第五冊", "第六冊", "總複習", "不分冊"];
@@ -213,7 +214,9 @@ function QuizApp() {
   }, []);
 
   useEffect(() => {
+    // 嚴格檢查：只有當 user 和 db 都存在時才建立監聽
     if (!user || !db) return;
+    
     try {
       const q = collection(db, 'artifacts', appId, 'public', 'data', 'quiz_questions');
       const unsubQuestions = onSnapshot(q, (snapshot) => {
@@ -221,14 +224,20 @@ function QuizApp() {
         const getTime = (t) => t?.toMillis ? t.toMillis() : (t?.seconds ? t.seconds * 1000 : 0);
         docs.sort((a, b) => getTime(a.createdAt) - getTime(b.createdAt));
         setQuestions(docs);
+      }, (error) => {
+        console.error("Questions Snapshot Error:", error);
       });
+
       const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'quiz_settings', 'global');
       const unsubSettings = onSnapshot(settingsRef, (docSnap) => {
           if (docSnap.exists()) setGlobalSettings(docSnap.data());
+      }, (error) => {
+          console.error("Settings Snapshot Error:", error);
       });
+      
       return () => { unsubQuestions(); unsubSettings(); };
     } catch (err) {
-      console.error("Firestore Error:", err);
+      console.error("Firestore Setup Error:", err);
     }
   }, [user]);
 
@@ -259,7 +268,7 @@ function QuizApp() {
             onClick={goHome}
           >
             <BookOpen className="w-6 h-6" />
-            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v4.1</h1>
+            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v4.4</h1>
             <h1 className="text-xl font-bold tracking-wide sm:hidden">測驗大師</h1>
           </div>
           <div className="flex items-center gap-2">
@@ -393,8 +402,8 @@ function QuizSession({ questions, globalSettings, user, label, roleOverride, win
       )}
 
       {!user && <LandingPage questionCount={questions.length} />}
-      {isTeacher && <TeacherDashboard questions={questions} globalSettings={globalSettings} userId={user.uid} windowId={windowId} />}
-      {isStudent && <StudentDashboard questions={questions} globalSettings={globalSettings} windowId={windowId} />}
+      {isTeacher && <TeacherDashboard questions={questions} globalSettings={globalSettings} userId={user.uid} windowId={windowId} user={user} />}
+      {isStudent && <StudentDashboard questions={questions} globalSettings={globalSettings} windowId={windowId} user={user} />}
     </div>
   );
 }
@@ -540,20 +549,21 @@ function LandingPage({ questionCount, currentUser, onEnterDashboard }) {
 }
 
 // --- 學生管理元件 ---
-function StudentManager() {
+function StudentManager({ user }) {
     const [students, setStudents] = useState([]);
     const [id, setId] = useState('');
     const [name, setName] = useState('');
-    const [bulkText, setBulkText] = useState(''); // 批次文字
-    const [showBulk, setShowBulk] = useState(false); // 切換模式
+    const [bulkText, setBulkText] = useState('');
+    const [showBulk, setShowBulk] = useState(false);
     const [isImporting, setIsImporting] = useState(false);
     
     useEffect(() => {
+        if (!user) return;
         const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'quiz_students'), (snap) => {
             setStudents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-        });
+        }, (err) => console.error("Student snapshot error", err));
         return () => unsub();
-    }, []);
+    }, [user]);
 
     const addStudent = async (e) => {
         e.preventDefault();
@@ -570,29 +580,56 @@ function StudentManager() {
     const handleBulkImport = async () => {
         if (!bulkText.trim()) return alert('請輸入資料');
         setIsImporting(true);
-        const lines = bulkText.split('\n');
-        let count = 0;
-        try {
-            for (const line of lines) {
-                // 支援逗號、Tab、直線、空格分隔
-                const parts = line.trim().split(/[,|\t\s]+/); 
-                if (parts.length >= 2) {
-                    const sid = parts[0].trim();
-                    const sname = parts[1].trim();
-                    if (sid && sname) {
-                        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_students', sid), { name: sname });
-                        count++;
-                    }
-                }
+        
+        const rawLines = bulkText.replace(/\r\n/g, '\n').split('\n');
+        let successCount = 0;
+        let failedLines = [];
+
+        for (let i = 0; i < rawLines.length; i++) {
+            const line = rawLines[i].trim();
+            if (!line) continue; 
+
+            let sid = null;
+            let sname = null;
+
+            if (line.includes('\t')) {
+                const parts = line.split('\t');
+                sid = parts[0].trim();
+                sname = parts[1]?.trim();
+            } else if (line.includes(',')) {
+                const parts = line.split(',');
+                sid = parts[0].trim();
+                sname = parts[1]?.trim();
+            } else if (line.includes(' ')) {
+                const firstSpaceIndex = line.indexOf(' ');
+                sid = line.substring(0, firstSpaceIndex).trim();
+                sname = line.substring(firstSpaceIndex + 1).trim();
             }
-            alert(`成功匯入 ${count} 筆資料`);
+
+            if (sid && sname) {
+                const safeSid = sid.replace(/[.#$\/\[\]]/g, '_');
+                try {
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_students', safeSid), { name: sname });
+                    successCount++;
+                } catch (err) {
+                    console.error("Import error:", err);
+                    failedLines.push(`第 ${i+1} 行 (${line}): 資料庫寫入失敗`);
+                }
+            } else {
+                failedLines.push(`第 ${i+1} 行 (${line}): 格式無法識別`);
+            }
+        }
+
+        setIsImporting(false);
+        let msg = `匯入完成！\n成功：${successCount} 筆`;
+        if (failedLines.length > 0) {
+            msg += `\n失敗：${failedLines.length} 筆\n\n失敗明細 (前5筆)：\n${failedLines.slice(0, 5).join('\n')}`;
+            if (failedLines.length > 5) msg += '\n...等';
+        }
+        alert(msg);
+        if (successCount > 0) {
             setBulkText('');
             setShowBulk(false);
-        } catch (err) {
-            console.error(err);
-            alert('部分匯入失敗，請檢查格式');
-        } finally {
-            setIsImporting(false);
         }
     };
 
@@ -609,18 +646,8 @@ function StudentManager() {
             </h3>
 
             <div className="flex gap-2 mb-4 bg-slate-100 p-1 rounded-lg">
-                <button 
-                    onClick={() => setShowBulk(false)} 
-                    className={`flex-1 py-1.5 text-sm rounded-md transition font-bold ${!showBulk ? 'bg-white shadow text-indigo-700' : 'text-slate-500'}`}
-                >
-                    單筆新增
-                </button>
-                <button 
-                    onClick={() => setShowBulk(true)} 
-                    className={`flex-1 py-1.5 text-sm rounded-md transition font-bold ${showBulk ? 'bg-white shadow text-indigo-700' : 'text-slate-500'}`}
-                >
-                    批次匯入
-                </button>
+                <button onClick={() => setShowBulk(false)} className={`flex-1 py-1.5 text-sm rounded-md transition font-bold ${!showBulk ? 'bg-white shadow text-indigo-700' : 'text-slate-500'}`}>單筆新增</button>
+                <button onClick={() => setShowBulk(true)} className={`flex-1 py-1.5 text-sm rounded-md transition font-bold ${showBulk ? 'bg-white shadow text-indigo-700' : 'text-slate-500'}`}>批次匯入</button>
             </div>
 
             {!showBulk ? (
@@ -631,22 +658,27 @@ function StudentManager() {
                 </form>
             ) : (
                 <div className="mb-4">
-                    <div className="text-xs text-slate-500 mb-2 p-2 bg-slate-50 rounded">
-                        請貼上資料，每行一筆，格式：<br/>
-                        <span className="font-mono text-indigo-600">A123456789, 王小明</span> 或 <span className="font-mono text-indigo-600">A123456789 王小明</span>
+                    <div className="text-xs text-slate-500 mb-2 p-2 bg-slate-50 rounded border border-slate-200">
+                        <p className="font-bold mb-1">📝 支援格式 (每行一筆)：</p>
+                        <ul className="list-disc list-inside space-y-1 ml-1">
+                            <li><span className="font-mono bg-slate-200 px-1 rounded">學號 姓名</span> (空格分隔)</li>
+                            <li><span className="font-mono bg-slate-200 px-1 rounded">學號,姓名</span> (逗號分隔)</li>
+                            <li>Excel 直接複製貼上 (Tab分隔)</li>
+                        </ul>
                     </div>
                     <textarea 
                         value={bulkText}
                         onChange={e => setBulkText(e.target.value)}
-                        className="w-full h-32 border p-2 rounded text-sm font-mono mb-2 outline-none focus:border-indigo-500"
-                        placeholder="在此貼上名單..."
+                        className="w-full h-48 border p-2 rounded text-sm font-mono mb-2 outline-none focus:border-indigo-500"
+                        placeholder="請在此貼上名單..."
                     />
                     <button 
                         onClick={handleBulkImport} 
                         disabled={isImporting}
-                        className="w-full bg-emerald-600 text-white py-2 rounded text-sm font-bold hover:bg-emerald-700 transition disabled:bg-slate-300"
+                        className="w-full bg-emerald-600 text-white py-2 rounded text-sm font-bold hover:bg-emerald-700 transition disabled:bg-slate-300 flex justify-center items-center gap-2"
                     >
-                        {isImporting ? '匯入中...' : '開始匯入'}
+                        {isImporting ? <RefreshCcw className="w-4 h-4 animate-spin"/> : <UploadCloud className="w-4 h-4"/>}
+                        {isImporting ? '處理中...' : '開始匯入'}
                     </button>
                 </div>
             )}
@@ -670,13 +702,13 @@ function StudentManager() {
     );
 }
 
-function TeacherDashboard({ questions, globalSettings, userId, windowId }) {
+function TeacherDashboard({ questions, globalSettings, userId, windowId, user }) {
   const [activeTab, setActiveTab] = useState('list'); 
   const [selectedSubject, setSelectedSubject] = useState('全部'); 
   const [editingId, setEditingId] = useState(null); 
   const fileInputRef = useRef(null);
   const [isUploading, setIsUploading] = useState(false);
-  const [viewingLeaderboard, setViewingLeaderboard] = useState(null); // 目前正在查看排行榜的單元
+  const [viewingLeaderboard, setViewingLeaderboard] = useState(null); 
 
   const safeWindowId = windowId || `teacher-${Math.random()}`;
 
@@ -697,16 +729,16 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId }) {
   const [expandedResultUnits, setExpandedResultUnits] = useState({});
 
   useEffect(() => {
-    if (activeTab === 'results') {
+    if (activeTab === 'results' && user) {
         const q = collection(db, 'artifacts', appId, 'public', 'data', 'quiz_results');
         const unsubscribe = onSnapshot(q, (snapshot) => {
             const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             docs.sort((a, b) => (b.submittedAt?.seconds || 0) - (a.submittedAt?.seconds || 0));
             setResults(docs);
-        });
+        }, (err) => console.error("Results snapshot error", err));
         return () => unsubscribe();
     }
-  }, [activeTab]);
+  }, [activeTab, user]);
 
   const filteredAndGroupedQuestions = useMemo(() => {
     let filtered = questions;
@@ -742,7 +774,6 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId }) {
     }, {});
   }, [results]);
 
-  // 計算排行榜資料：取每個學生在該單元的最高分
   const getLeaderboardData = (unit) => {
       const unitResults = resultsByUnit[unit] || [];
       const bestScores = {};
@@ -896,7 +927,7 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId }) {
           {[
             { id: 'list', label: '列表', icon: <FileText className="w-3 h-3 mr-1"/> },
             { id: 'add', label: editingId ? '編輯' : '新增', icon: <Plus className="w-3 h-3 mr-1"/> },
-            { id: 'students', label: '學生管理', icon: <Users className="w-3 h-3 mr-1"/> }, // 新增分頁
+            { id: 'students', label: '學生管理', icon: <Users className="w-3 h-3 mr-1"/> }, 
             { id: 'import', label: '匯入', icon: <UploadCloud className="w-3 h-3 mr-1"/> },
             { id: 'results', label: '成績', icon: <BarChart3 className="w-3 h-3 mr-1" /> }
           ].map(tab => (
@@ -977,7 +1008,7 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId }) {
         </div>
       )}
 
-      {activeTab === 'students' && <StudentManager />} {/* 學生管理 */}
+      {activeTab === 'students' && <StudentManager user={user} />}
 
       {activeTab === 'import' && <BulkImport userId={userId} />}
 
@@ -1089,7 +1120,7 @@ function BulkImport({ userId }) {
   );
 }
 
-function StudentDashboard({ questions, globalSettings, windowId }) {
+function StudentDashboard({ questions, globalSettings, windowId, user }) {
   const [mode, setMode] = useState('setup');
   const [selSub, setSelSub] = useState('數學');
   const [selUnit, setSelUnit] = useState('all');
@@ -1120,8 +1151,12 @@ function StudentDashboard({ questions, globalSettings, windowId }) {
       e.preventDefault();
       if (!studentIdInput) return alert("請輸入身分證字號");
       setIsVerifying(true);
+      
+      // 修正 ID：移除可能導致路徑錯誤的字元
+      const safeSid = studentIdInput.trim().replace(/[.#$\/\[\]]/g, '_');
+
       try {
-          const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'quiz_students', studentIdInput.trim());
+          const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'quiz_students', safeSid);
           const docSnap = await getDoc(docRef);
           
           if (docSnap.exists()) {
@@ -1133,7 +1168,7 @@ function StudentDashboard({ questions, globalSettings, windowId }) {
           }
       } catch (err) {
           console.error(err);
-          alert("登入驗證發生錯誤");
+          alert("登入驗證發生錯誤，請稍後再試");
       } finally {
           setIsVerifying(false);
       }

@@ -138,7 +138,11 @@ try {
   console.error("Firebase Init Error:", e);
 }
 
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+// 修正：使用函式動態獲取 App ID，避免初始化時變數尚未準備好
+const getAppId = () => {
+    if (typeof __app_id !== 'undefined') return __app_id;
+    return 'default-app-id';
+};
 
 const SUBJECTS = ["國文", "英語", "數學", "自然", "地理", "歷史", "公民", "其他"];
 const VOLUMES = ["第一冊", "第二冊", "第三冊", "第四冊", "第五冊", "第六冊", "總複習", "不分冊"];
@@ -228,6 +232,7 @@ function QuizApp() {
     let unsubS = () => {};
 
     try {
+      const appId = getAppId(); // 使用動態 ID
       unsubQ = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'quiz_questions'), (snapshot) => {
         const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         const getTime = (t) => t?.toMillis ? t.toMillis() : (t?.seconds ? t.seconds * 1000 : 0);
@@ -277,7 +282,7 @@ function QuizApp() {
             onClick={goHome}
           >
             <BookOpen className="w-6 h-6" />
-            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v4.8</h1>
+            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v4.9</h1>
             <h1 className="text-xl font-bold tracking-wide sm:hidden">測驗大師</h1>
           </div>
           <div className="flex items-center gap-2">
@@ -571,6 +576,8 @@ function StudentManager({ user }) {
     const [isImporting, setIsImporting] = useState(false);
     const [permissionError, setPermissionError] = useState(false);
     
+    const appId = getAppId(); // 使用動態获取 ID
+
     useEffect(() => {
         if (!user) return;
         
@@ -759,6 +766,7 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user })
   const [viewingLeaderboard, setViewingLeaderboard] = useState(null); 
 
   const safeWindowId = windowId || `teacher-${Math.random()}`;
+  const appId = getAppId();
 
   const [newQuestion, setNewQuestion] = useState({
     subject: '數學',
@@ -1138,6 +1146,8 @@ function BulkImport({ userId }) {
   const [unit, setUnit] = useState('匯入題庫');
   const [preview, setPreview] = useState([]);
   
+  const appId = getAppId(); // 使用動態 ID
+
   const handleParse = () => {
     const parsed = text.split('\n').filter(l => l.trim()).map(line => {
       const p = line.split('|');
@@ -1182,6 +1192,7 @@ function StudentDashboard({ questions, globalSettings, windowId, user }) {
   const [isVerifying, setIsVerifying] = useState(false); // 驗證中狀態
   
   const safeId = windowId || `student-${Math.random()}`;
+  const appId = getAppId(); // 使用動態 ID
 
   const filteredQs = useMemo(() => {
       return questions.filter(q => q.subject === selSub && (selUnit === 'all' || `${q.volume}|${q.unit}` === selUnit));

@@ -27,7 +27,8 @@ import {
   getStorage, 
   ref, 
   uploadBytes, 
-  getDownloadURL 
+  getDownloadURL,
+  deleteObject
 } from 'firebase/storage';
 import { 
   BookOpen, 
@@ -291,7 +292,7 @@ function QuizApp() {
             onClick={goHome}
           >
             <BookOpen className="w-6 h-6" />
-            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v9.4</h1>
+            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v9.5</h1>
             <h1 className="text-xl font-bold tracking-wide sm:hidden">測驗大師</h1>
           </div>
           <div className="flex items-center gap-2">
@@ -431,7 +432,210 @@ function QuizSession({ questions, globalSettings, user, label, roleOverride, win
   );
 }
 
-// 補回：學生管理元件
+function LandingPage({ questionCount, currentUser, onEnterDashboard }) {
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [isRegistering, setIsRegistering] = useState(false); 
+
+  const handleStudentClick = async () => {
+      if (currentUser && currentUser.isAnonymous) {
+          onEnterDashboard();
+      } else {
+          try {
+              setIsLoggingIn(true);
+              if (currentUser) {
+                  await signOut(auth).catch(e => console.warn("Sign out failed", e));
+              }
+              await signInAnonymously(auth);
+          } catch (error) {
+              console.error("Student login failed", error);
+              if (error.code === 'auth/operation-not-allowed') {
+                  alert("系統設定錯誤：請至 Firebase Console 開啟「匿名 (Anonymous)」登入功能。");
+              } else {
+                  alert("登入失敗: " + error.message);
+              }
+              setIsLoggingIn(false);
+          }
+      }
+  };
+
+  const handleTeacherClick = () => {
+      if (currentUser && !currentUser.isAnonymous) {
+          onEnterDashboard();
+      } else {
+          setShowLoginModal(true);
+          setErrorMsg('');
+          setIsRegistering(false); 
+      }
+  };
+
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    setIsLoggingIn(true);
+    setErrorMsg('');
+    try {
+        if (isRegistering) {
+            await createUserWithEmailAndPassword(auth, email, password);
+        } else {
+            await signInWithEmailAndPassword(auth, email, password);
+        }
+    } catch (error) {
+        console.error("Auth Error:", error.code);
+        switch (error.code) {
+            case 'auth/operation-not-allowed':
+                setErrorMsg('錯誤：請至 Firebase Console 開啟「電子郵件/密碼」登入功能');
+                break;
+            case 'auth/user-not-found':
+            case 'auth/invalid-credential':
+                setErrorMsg('帳號不存在或密碼錯誤');
+                break;
+            case 'auth/wrong-password':
+                setErrorMsg('密碼錯誤');
+                break;
+            case 'auth/email-already-in-use':
+                setErrorMsg('此 Email 已經被註冊過了');
+                break;
+            case 'auth/weak-password':
+                setErrorMsg('密碼強度不足 (至少6位元)');
+                break;
+            case 'auth/invalid-email':
+                setErrorMsg('Email 格式不正確');
+                break;
+            default:
+                setErrorMsg('驗證失敗：' + error.message);
+        }
+        setIsLoggingIn(false);
+    }
+  };
+
+  const handleReset = async () => {
+      if(confirm("確定要重置登入狀態嗎？這將會強制登出。")) {
+        try {
+            await signOut(auth);
+            window.location.reload();
+        } catch(e) {
+            alert("重置失敗");
+        }
+      }
+  };
+
+  return (
+    <div className="flex flex-col items-center justify-center py-10 space-y-8 animate-in fade-in duration-500">
+      <div className="text-center space-y-3">
+        <h2 className="text-2xl font-bold text-slate-800">歡迎使用測驗系統</h2>
+        <p className="text-sm text-slate-500">目前題庫: <span className="font-bold text-indigo-600">{questionCount}</span> 題</p>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 w-full max-w-sm px-4">
+        <button 
+          onClick={handleStudentClick}
+          disabled={isLoggingIn}
+          className="group flex items-center p-5 bg-white rounded-2xl shadow-sm border border-slate-200 active:scale-95 transition-all hover:border-indigo-300 hover:shadow-md disabled:bg-slate-50 disabled:cursor-not-allowed"
+        >
+          <div className="bg-indigo-100 p-3 rounded-full mr-4">
+            <User className="w-6 h-6 text-indigo-600" />
+          </div>
+          <div className="text-left flex-1">
+            <h3 className="font-bold text-slate-800 text-lg">我是學生</h3>
+            <p className="text-xs text-gray-400">
+                {isLoggingIn ? '登入中...' : (currentUser && currentUser.isAnonymous ? '已登入，點擊繼續測驗' : '免註冊，直接進入測驗')}
+            </p>
+          </div>
+          {isLoggingIn ? <RefreshCcw className="w-5 h-5 animate-spin text-slate-400" /> : (currentUser && currentUser.isAnonymous ? <ArrowDown01 className="w-5 h-5 text-green-500" /> : <ChevronRight className="w-5 h-5 text-slate-300" />)}
+        </button>
+
+        <button 
+          onClick={handleTeacherClick}
+          disabled={isLoggingIn}
+          className="group flex items-center p-5 bg-white rounded-2xl shadow-sm border border-slate-200 active:scale-95 transition-all hover:border-emerald-300 hover:shadow-md disabled:bg-slate-50 disabled:cursor-not-allowed"
+        >
+          <div className="bg-emerald-100 p-3 rounded-full mr-4">
+            <GraduationCap className="w-6 h-6 text-emerald-600" />
+          </div>
+          <div className="text-left flex-1">
+            <h3 className="font-bold text-slate-800 text-lg">我是老師</h3>
+            <p className="text-xs text-gray-400">
+                {currentUser && !currentUser.isAnonymous ? '已登入，點擊進入後台' : '需登入以管理題目'}
+            </p>
+          </div>
+          {currentUser && !currentUser.isAnonymous ? <ArrowDown01 className="w-5 h-5 text-green-500" /> : <ChevronRight className="w-5 h-5 text-slate-300" />}
+        </button>
+
+        <button onClick={handleReset} className="text-xs text-slate-400 hover:text-red-500 flex items-center justify-center gap-1 mt-4">
+            <Power className="w-3 h-3" /> 重置系統狀態
+        </button>
+      </div>
+
+      {showLoginModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-white p-6 rounded-2xl shadow-xl w-full max-w-xs animate-in zoom-in-95 border border-white/20">
+                <div className="flex justify-between items-center mb-6">
+                    <h3 className="font-bold text-slate-700 flex items-center gap-2 text-lg">
+                        <KeyRound className="w-5 h-5 text-emerald-500" />
+                        {isRegistering ? '教師註冊' : '教師登入'}
+                    </h3>
+                    <button onClick={() => setShowLoginModal(false)} className="text-slate-400 hover:text-slate-600 p-1">
+                        <XCircle className="w-6 h-6" />
+                    </button>
+                </div>
+                <form onSubmit={handleAuthSubmit} className="space-y-4">
+                    <div>
+                        <label className="text-xs font-bold text-slate-500 block mb-1.5 ml-1">Email</label>
+                        <input 
+                            type="email" 
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            className="w-full border border-slate-300 rounded-xl px-4 py-3 text-sm outline-none focus:border-emerald-500"
+                            placeholder="teacher@school.com"
+                            required
+                        />
+                    </div>
+                    <div>
+                        <label className="text-xs font-bold text-slate-500 block mb-1.5 ml-1">密碼</label>
+                        <input 
+                            type="password" 
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            className="w-full border border-slate-300 rounded-xl px-4 py-3 text-sm outline-none focus:border-emerald-500"
+                            placeholder="輸入密碼 (至少6位)"
+                            required
+                            minLength={6}
+                        />
+                    </div>
+                     
+                    {errorMsg && <p className="text-xs text-red-500 text-center font-bold bg-red-50 p-2 rounded">{errorMsg}</p>}
+                    
+                    <button 
+                        type="submit" 
+                        disabled={isLoggingIn}
+                        className={`w-full text-white font-bold py-3 rounded-xl text-sm flex justify-center items-center gap-2 mt-2 transition-colors shadow-sm ${isRegistering ? 'bg-blue-600 hover:bg-blue-700' : 'bg-emerald-600 hover:bg-emerald-700'}`}
+                    >
+                        {isLoggingIn ? <RefreshCcw className="w-4 h-4 animate-spin" /> : (isRegistering ? '建立帳號並登入' : '確認登入')}
+                    </button>
+
+                    <div className="text-center mt-4">
+                        <button 
+                            type="button"
+                            onClick={() => {
+                                setIsRegistering(!isRegistering);
+                                setErrorMsg('');
+                            }}
+                            className="text-xs text-slate-500 hover:text-indigo-600 underline"
+                        >
+                            {isRegistering ? '已有帳號？返回登入' : '沒有帳號？立即註冊'}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StudentManager({ user, appId }) {
     const [students, setStudents] = useState([]);
     const [id, setId] = useState('');
@@ -618,7 +822,6 @@ function StudentManager({ user, appId }) {
     );
 }
 
-// 補回：大量匯入元件
 function BulkImport({ userId, appId }) {
   const [text, setText] = useState('');
   const [unit, setUnit] = useState('匯入題庫');
@@ -709,7 +912,6 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
     }
   }, [activeTab, user]);
 
-  // 修改重點：建立三層巢狀結構 (科目 -> 冊次 -> 單元)
   const structuredQuestions = useMemo(() => {
     const structure = {};
     const filtered = selectedSubject === '全部' ? questions : questions.filter(q => q.subject === selectedSubject);
@@ -752,7 +954,6 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
       return Object.values(bestScores).sort((a, b) => b.score - a.score);
   };
 
-  // 修改：使用複合 key 來確保 toggle 正確 (Subject-Volume-Unit)
   const toggleUnit = (uniqueKey) => setExpandedUnits(p => ({ ...p, [uniqueKey]: !p[uniqueKey] }));
   const toggleResultUnit = (unit) => setExpandedResultUnits(p => ({ ...p, [unit]: !p[unit] }));
 
@@ -767,17 +968,32 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
       }
   };
 
-  const handleDelete = async (id) => {
-    if (window.confirm('確定刪除？')) {
-      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_questions', id));
+  const handleDelete = async (q) => {
+    if (!window.confirm('確定刪除？')) return;
+
+    if (q.imageUrl) {
+        try {
+            const imageRef = ref(storage, q.imageUrl);
+            await deleteObject(imageRef);
+        } catch (e) {
+            console.warn("Image delete failed (might be already deleted)", e);
+        }
     }
+
+    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_questions', q.id));
   };
 
   const handleDeleteFolder = async (items) => {
     if (window.confirm(`確定要刪除「${items.length}」題嗎？`)) {
         try {
-            const promises = items.map(item => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_questions', item.id)));
-            await Promise.all(promises);
+            const imageDeletePromises = items
+                .filter(item => item.imageUrl)
+                .map(item => deleteObject(ref(storage, item.imageUrl)).catch(e => console.warn("Img del fail", e)));
+            await Promise.all(imageDeletePromises);
+
+            const docDeletePromises = items.map(item => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_questions', item.id)));
+            await Promise.all(docDeletePromises);
+            
             alert(`刪除成功`);
         } catch (err) {
             alert("刪除失敗");
@@ -966,10 +1182,8 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
               </div>
           </div>
 
-          {/* 新版三層結構顯示 (科目 -> 冊次 -> 單元) */}
           {Object.entries(structuredQuestions).sort().map(([subject, volumes]) => (
               <div key={subject} className="bg-slate-50 rounded-xl border border-slate-200 overflow-hidden mb-4">
-                  {/* 第一層：科目 */}
                   <div className="bg-indigo-100 px-4 py-3 border-b border-indigo-200 flex items-center gap-2">
                       <Library className="w-5 h-5 text-indigo-700" />
                       <h2 className="text-lg font-bold text-indigo-900">{subject}</h2>
@@ -978,14 +1192,12 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
                   <div className="p-2 space-y-3">
                       {Object.entries(volumes).sort().map(([volume, units]) => (
                           <div key={volume} className="pl-2 border-l-2 border-slate-300 ml-2">
-                              {/* 第二層：冊次 */}
                               <div className="flex items-center gap-2 mb-2 mt-1">
                                   <div className="w-2 h-2 rounded-full bg-slate-400"></div>
                                   <h3 className="font-bold text-slate-600 text-base">{volume}</h3>
                               </div>
 
                               <div className="space-y-2 pl-4">
-                                  {/* 第三層：單元資料夾 */}
                                   {Object.entries(units).sort().map(([unit, unitQuestions]) => {
                                       const uniqueKey = `${subject}-${volume}-${unit}`;
                                       const isExpanded = expandedUnits[uniqueKey];
@@ -1011,7 +1223,6 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
                                                   </button>
                                               </div>
                                               
-                                              {/* 展開後的題目列表 */}
                                               {isExpanded && (
                                                   <div className="bg-white divide-y divide-slate-100 border-t border-slate-100">
                                                       {unitQuestions.map((q, idx) => (
@@ -1031,7 +1242,7 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
                                                               </div>
                                                               <div className="flex gap-1">
                                                                   <button onClick={() => handleEdit(q)} className="text-slate-400 hover:text-indigo-600 p-2 hover:bg-indigo-50 rounded"><Pencil className="w-4 h-4"/></button>
-                                                                  <button onClick={() => handleDelete(q.id)} className="text-slate-400 hover:text-red-600 p-2 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4"/></button>
+                                                                  <button onClick={() => handleDelete(q)} className="text-slate-400 hover:text-red-600 p-2 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4"/></button>
                                                               </div>
                                                           </div>
                                                       ))}
@@ -1056,11 +1267,8 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
         </div>
       )}
 
-      {/* ... rest of the component (add, students, import, results tabs) ... */}
-      {/* (這些部分保持不變，但為了完整性我會包含在下面) */}
       {activeTab === 'add' && (
         <div className="bg-white p-6 rounded-lg shadow">
-          {/* ... Add Form Content ... */}
           <h3 className="font-bold text-xl mb-4 flex items-center gap-2 text-slate-700">
              {editingId ? <Pencil className="w-6 h-6 text-amber-500"/> : <Plus className="w-6 h-6 text-indigo-500"/>} 
              {editingId ? '編輯題目' : '新增題目'}
@@ -1206,216 +1414,6 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
                   </div>
               </div>
           </div>
-      )}
-    </div>
-  );
-}
-
-// ... existing code (BulkImport, StudentDashboard, LandingPage, StudentManager) ...
-function LandingPage({ questionCount, currentUser, onEnterDashboard }) {
-  const [showLoginModal, setShowLoginModal] = useState(false);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [errorMsg, setErrorMsg] = useState('');
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
-  const [isRegistering, setIsRegistering] = useState(false); 
-
-  const handleStudentClick = async () => {
-      if (currentUser && currentUser.isAnonymous) {
-          onEnterDashboard();
-      } else {
-          try {
-              setIsLoggingIn(true);
-              
-              if (currentUser) {
-                  await signOut(auth).catch(e => console.warn("Sign out failed", e));
-              }
-
-              await signInAnonymously(auth);
-
-          } catch (error) {
-              console.error("Student login failed", error);
-              if (error.code === 'auth/operation-not-allowed') {
-                  alert("系統設定錯誤：請至 Firebase Console 開啟「匿名 (Anonymous)」登入功能。");
-              } else {
-                  alert("登入失敗: " + error.message);
-              }
-              setIsLoggingIn(false);
-          }
-      }
-  };
-
-  const handleTeacherClick = () => {
-      if (currentUser && !currentUser.isAnonymous) {
-          onEnterDashboard();
-      } else {
-          setShowLoginModal(true);
-          setErrorMsg('');
-          setIsRegistering(false); 
-      }
-  };
-
-  const handleAuthSubmit = async (e) => {
-    e.preventDefault();
-    setIsLoggingIn(true);
-    setErrorMsg('');
-    
-    try {
-        if (isRegistering) {
-            await createUserWithEmailAndPassword(auth, email, password);
-        } else {
-            await signInWithEmailAndPassword(auth, email, password);
-        }
-    } catch (error) {
-        console.error("Auth Error:", error.code);
-        switch (error.code) {
-            case 'auth/operation-not-allowed':
-                setErrorMsg('錯誤：請至 Firebase Console 開啟「電子郵件/密碼」登入功能');
-                break;
-            case 'auth/user-not-found':
-            case 'auth/invalid-credential':
-                setErrorMsg('帳號不存在或密碼錯誤');
-                break;
-            case 'auth/wrong-password':
-                setErrorMsg('密碼錯誤');
-                break;
-            case 'auth/email-already-in-use':
-                setErrorMsg('此 Email 已經被註冊過了');
-                break;
-            case 'auth/weak-password':
-                setErrorMsg('密碼強度不足 (至少6位元)');
-                break;
-            case 'auth/invalid-email':
-                setErrorMsg('Email 格式不正確');
-                break;
-            default:
-                setErrorMsg('驗證失敗：' + error.message);
-        }
-        setIsLoggingIn(false);
-    }
-  };
-
-  const handleReset = async () => {
-      if(confirm("確定要重置登入狀態嗎？這將會強制登出。")) {
-        try {
-            await signOut(auth);
-            window.location.reload();
-        } catch(e) {
-            alert("重置失敗");
-        }
-      }
-  };
-
-  return (
-    <div className="flex flex-col items-center justify-center py-10 space-y-8 animate-in fade-in duration-500">
-      <div className="text-center space-y-3">
-        <h2 className="text-2xl font-bold text-slate-800">歡迎使用測驗系統</h2>
-        <p className="text-sm text-slate-500">目前題庫: <span className="font-bold text-indigo-600">{questionCount}</span> 題</p>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 w-full max-w-sm px-4">
-        <button 
-          onClick={handleStudentClick}
-          disabled={isLoggingIn}
-          className="group flex items-center p-5 bg-white rounded-2xl shadow-sm border border-slate-200 active:scale-95 transition-all hover:border-indigo-300 hover:shadow-md disabled:bg-slate-50 disabled:cursor-not-allowed"
-        >
-          <div className="bg-indigo-100 p-3 rounded-full mr-4">
-            <User className="w-6 h-6 text-indigo-600" />
-          </div>
-          <div className="text-left flex-1">
-            <h3 className="font-bold text-slate-800 text-lg">我是學生</h3>
-            <p className="text-xs text-gray-400">
-                {isLoggingIn ? '登入中...' : (currentUser && currentUser.isAnonymous ? '已登入，點擊繼續測驗' : '免註冊，直接進入測驗')}
-            </p>
-          </div>
-          {isLoggingIn ? <RefreshCcw className="w-5 h-5 animate-spin text-slate-400" /> : (currentUser && currentUser.isAnonymous ? <ArrowDown01 className="w-5 h-5 text-green-500" /> : <ChevronRight className="w-5 h-5 text-slate-300" />)}
-        </button>
-
-        <button 
-          onClick={handleTeacherClick}
-          disabled={isLoggingIn}
-          className="group flex items-center p-5 bg-white rounded-2xl shadow-sm border border-slate-200 active:scale-95 transition-all hover:border-emerald-300 hover:shadow-md disabled:bg-slate-50 disabled:cursor-not-allowed"
-        >
-          <div className="bg-emerald-100 p-3 rounded-full mr-4">
-            <GraduationCap className="w-6 h-6 text-emerald-600" />
-          </div>
-          <div className="text-left flex-1">
-            <h3 className="font-bold text-slate-800 text-lg">我是老師</h3>
-            <p className="text-xs text-gray-400">
-                {currentUser && !currentUser.isAnonymous ? '已登入，點擊進入後台' : '需登入以管理題目'}
-            </p>
-          </div>
-          {currentUser && !currentUser.isAnonymous ? <ArrowDown01 className="w-5 h-5 text-green-500" /> : <ChevronRight className="w-5 h-5 text-slate-300" />}
-        </button>
-
-        {/* 故障排除按鈕 */}
-        <button onClick={handleReset} className="text-xs text-slate-400 hover:text-red-500 flex items-center justify-center gap-1 mt-4">
-            <Power className="w-3 h-3" /> 重置系統狀態
-        </button>
-      </div>
-
-      {showLoginModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-white p-6 rounded-2xl shadow-xl w-full max-w-xs animate-in zoom-in-95 border border-white/20">
-                <div className="flex justify-between items-center mb-6">
-                    <h3 className="font-bold text-slate-700 flex items-center gap-2 text-lg">
-                        <KeyRound className="w-5 h-5 text-emerald-500" />
-                        {isRegistering ? '教師註冊' : '教師登入'}
-                    </h3>
-                    <button onClick={() => setShowLoginModal(false)} className="text-slate-400 hover:text-slate-600 p-1">
-                        <XCircle className="w-6 h-6" />
-                    </button>
-                </div>
-                <form onSubmit={handleAuthSubmit} className="space-y-4">
-                    <div>
-                        <label className="text-xs font-bold text-slate-500 block mb-1.5 ml-1">Email</label>
-                        <input 
-                            type="email" 
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            className="w-full border border-slate-300 rounded-xl px-4 py-3 text-sm outline-none focus:border-emerald-500"
-                            placeholder="teacher@school.com"
-                            required
-                        />
-                    </div>
-                    <div>
-                        <label className="text-xs font-bold text-slate-500 block mb-1.5 ml-1">密碼</label>
-                        <input 
-                            type="password" 
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            className="w-full border border-slate-300 rounded-xl px-4 py-3 text-sm outline-none focus:border-emerald-500"
-                            placeholder="輸入密碼 (至少6位)"
-                            required
-                            minLength={6}
-                        />
-                    </div>
-                     
-                    {errorMsg && <p className="text-xs text-red-500 text-center font-bold bg-red-50 p-2 rounded">{errorMsg}</p>}
-                    
-                    <button 
-                        type="submit" 
-                        disabled={isLoggingIn}
-                        className={`w-full text-white font-bold py-3 rounded-xl text-sm flex justify-center items-center gap-2 mt-2 transition-colors shadow-sm ${isRegistering ? 'bg-blue-600 hover:bg-blue-700' : 'bg-emerald-600 hover:bg-emerald-700'}`}
-                    >
-                        {isLoggingIn ? <RefreshCcw className="w-4 h-4 animate-spin" /> : (isRegistering ? '建立帳號並登入' : '確認登入')}
-                    </button>
-
-                    <div className="text-center mt-4">
-                        <button 
-                            type="button"
-                            onClick={() => {
-                                setIsRegistering(!isRegistering);
-                                setErrorMsg('');
-                            }}
-                            className="text-xs text-slate-500 hover:text-indigo-600 underline"
-                        >
-                            {isRegistering ? '已有帳號？返回登入' : '沒有帳號？立即註冊'}
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
       )}
     </div>
   );

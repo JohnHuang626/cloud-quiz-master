@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 import { 
   getAuth, 
   signInAnonymously, 
   signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
   signOut,                     
   onAuthStateChanged,
-  signInWithCustomToken
+  signInWithCustomToken,
+  setPersistence,
+  browserLocalPersistence
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -75,7 +78,9 @@ import {
   KeyRound,
   X,
   Users,
-  AlertTriangle
+  AlertTriangle,
+  Power,
+  UserX
 } from 'lucide-react';
 
 // --- 錯誤邊界元件 ---
@@ -118,9 +123,8 @@ class ErrorBoundary extends React.Component {
   }
 }
 
-// --- Firebase 初始化 ---
-// 請將以下的字串換成您 Firebase 後台顯示的真實資料
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+// --- Firebase 初始化 (強制具名實例版 - 穩定關鍵) ---
+const firebaseConfig = {
   apiKey: "AIzaSyCCy_dv6TY4cKHlXKMNYDBOl4HFgjrY_NU",
   authDomain: "quiz-master-final-v2.firebaseapp.com",
   projectId: "quiz-master-final-v2",
@@ -130,16 +134,32 @@ const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__f
 };
 
 let app, auth, db, storage;
+// 使用專屬名稱，避免與系統預設 App 衝突，這是解決登入問題的核心
+const APP_NAME = "quiz-master-v6-dedicated"; 
+
 try {
-  app = initializeApp(firebaseConfig);
+  // 檢查是否已經存在這個具名的 App
+  const existingApp = getApps().find(app => app.name === APP_NAME);
+  
+  if (existingApp) {
+    app = existingApp;
+  } else {
+    // 強制使用我們的 Config 初始化一個新的、具名的 App
+    app = initializeApp(firebaseConfig, APP_NAME);
+  }
+  
+  // 從這個具名 App 獲取服務實例
   auth = getAuth(app);
   db = getFirestore(app);
   storage = getStorage(app);
+
+  // 明確設定持久性，避免重新整理後狀態遺失
+  setPersistence(auth, browserLocalPersistence).catch(e => console.warn("Persistence warning:", e));
+
 } catch (e) {
-  console.error("Firebase Init Error:", e);
+  console.error("Firebase Init Critical Error:", e);
 }
 
-// v5.0: 使用環境變數或預設 ID，確保部署後路徑正確
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'cloud-quiz-master-v1';
 
 const SUBJECTS = ["國文", "英語", "數學", "自然", "地理", "歷史", "公民", "其他"];
@@ -192,35 +212,28 @@ function QuizApp() {
 
   useEffect(() => {
     if (!auth) {
-      setInitError("Firebase 初始化失敗，請檢查網路。");
+      setInitError("Firebase 初始化失敗，請重新整理頁面。");
       setLoading(false);
       return;
     }
 
-    const initAuth = async () => {
-        try {
-            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                await signInWithCustomToken(auth, __initial_auth_token).catch(e => console.warn(e));
-            }
-            const unsubscribe = onAuthStateChanged(auth, (u) => {
-                setUser(u);
-                if (u) {
-                    setCurrentView('dashboard');
-                } else {
-                    setCurrentView('landing');
-                }
-                setLoading(false);
-            });
-            return unsubscribe;
-        } catch (err) {
-            console.error("Auth Init Error:", err);
-            setInitError(err.message);
-            setLoading(false);
-        }
-    };
+    // 立即檢查當前狀態 (避免等待 listener 導致的閃爍)
+    if (auth.currentUser) {
+        setUser(auth.currentUser);
+        setCurrentView('dashboard');
+    }
 
-    const unsub = initAuth();
-    return () => { if (unsub && typeof unsub === 'function') unsub(); };
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+        setUser(u);
+        if (u) {
+            setCurrentView('dashboard');
+        } else {
+            setCurrentView('landing');
+        }
+        setLoading(false);
+    });
+
+    return () => unsubscribe();
   }, []);
 
   useEffect(() => {
@@ -279,11 +292,10 @@ function QuizApp() {
             onClick={goHome}
           >
             <BookOpen className="w-6 h-6" />
-            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v5.5</h1>
+            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v9.1</h1>
             <h1 className="text-xl font-bold tracking-wide sm:hidden">測驗大師</h1>
           </div>
           <div className="flex items-center gap-2">
-            {/* 只有老師才顯示雙視窗 */}
             {!showLanding && !user?.isAnonymous && (
                 <button 
                 onClick={() => setIsSplitScreen(!isSplitScreen)}
@@ -426,6 +438,7 @@ function LandingPage({ questionCount, currentUser, onEnterDashboard }) {
   const [password, setPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [isRegistering, setIsRegistering] = useState(false); 
 
   const handleStudentClick = async () => {
       if (currentUser && currentUser.isAnonymous) {
@@ -433,15 +446,23 @@ function LandingPage({ questionCount, currentUser, onEnterDashboard }) {
       } else {
           try {
               setIsLoggingIn(true);
-              if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                  await signInWithCustomToken(auth, __initial_auth_token);
-              } else {
-                  if (currentUser) await signOut(auth);
-                  await signInAnonymously(auth);
+              
+              // 強制重置：如果當前有登入但狀態怪異，先登出
+              if (currentUser) {
+                  await signOut(auth).catch(e => console.warn("Sign out failed", e));
               }
+
+              // 因為我們現在強制使用具名 App (QuizApp-v6)，所以忽略 __initial_auth_token
+              // 這是為了確保我們連接到您正確的 quiz-master-final-v2 專案
+              await signInAnonymously(auth);
+
           } catch (error) {
               console.error("Student login failed", error);
-              alert("登入失敗: " + error.message);
+              if (error.code === 'auth/operation-not-allowed') {
+                  alert("系統設定錯誤：請至 Firebase Console 開啟「匿名 (Anonymous)」登入功能。");
+              } else {
+                  alert("登入失敗: " + error.message);
+              }
               setIsLoggingIn(false);
           }
       }
@@ -452,20 +473,60 @@ function LandingPage({ questionCount, currentUser, onEnterDashboard }) {
           onEnterDashboard();
       } else {
           setShowLoginModal(true);
+          setErrorMsg('');
+          setIsRegistering(false); 
       }
   };
 
-  const handleTeacherLogin = async (e) => {
+  const handleAuthSubmit = async (e) => {
     e.preventDefault();
     setIsLoggingIn(true);
     setErrorMsg('');
+    
     try {
-        await signInWithEmailAndPassword(auth, email, password);
+        if (isRegistering) {
+            await createUserWithEmailAndPassword(auth, email, password);
+        } else {
+            await signInWithEmailAndPassword(auth, email, password);
+        }
     } catch (error) {
-        console.error("Login Error:", error);
-        setErrorMsg('登入失敗：帳號或密碼錯誤');
+        console.error("Auth Error:", error.code);
+        switch (error.code) {
+            case 'auth/operation-not-allowed':
+                setErrorMsg('錯誤：請至 Firebase Console 開啟「電子郵件/密碼」登入功能');
+                break;
+            case 'auth/user-not-found':
+            case 'auth/invalid-credential':
+                setErrorMsg('帳號不存在或密碼錯誤');
+                break;
+            case 'auth/wrong-password':
+                setErrorMsg('密碼錯誤');
+                break;
+            case 'auth/email-already-in-use':
+                setErrorMsg('此 Email 已經被註冊過了');
+                break;
+            case 'auth/weak-password':
+                setErrorMsg('密碼強度不足 (至少6位元)');
+                break;
+            case 'auth/invalid-email':
+                setErrorMsg('Email 格式不正確');
+                break;
+            default:
+                setErrorMsg('驗證失敗：' + error.message);
+        }
         setIsLoggingIn(false);
     }
+  };
+
+  const handleReset = async () => {
+      if(confirm("確定要重置登入狀態嗎？這將會強制登出。")) {
+        try {
+            await signOut(auth);
+            window.location.reload();
+        } catch(e) {
+            alert("重置失敗");
+        }
+      }
   };
 
   return (
@@ -479,7 +540,7 @@ function LandingPage({ questionCount, currentUser, onEnterDashboard }) {
         <button 
           onClick={handleStudentClick}
           disabled={isLoggingIn}
-          className="group flex items-center p-5 bg-white rounded-2xl shadow-sm border border-slate-200 active:scale-95 transition-all hover:border-indigo-300 hover:shadow-md"
+          className="group flex items-center p-5 bg-white rounded-2xl shadow-sm border border-slate-200 active:scale-95 transition-all hover:border-indigo-300 hover:shadow-md disabled:bg-slate-50 disabled:cursor-not-allowed"
         >
           <div className="bg-indigo-100 p-3 rounded-full mr-4">
             <User className="w-6 h-6 text-indigo-600" />
@@ -487,16 +548,16 @@ function LandingPage({ questionCount, currentUser, onEnterDashboard }) {
           <div className="text-left flex-1">
             <h3 className="font-bold text-slate-800 text-lg">我是學生</h3>
             <p className="text-xs text-gray-400">
-                {currentUser && currentUser.isAnonymous ? '已登入，點擊繼續測驗' : '免註冊，直接進入測驗'}
+                {isLoggingIn ? '登入中...' : (currentUser && currentUser.isAnonymous ? '已登入，點擊繼續測驗' : '免註冊，直接進入測驗')}
             </p>
           </div>
-          {currentUser && currentUser.isAnonymous ? <ArrowDown01 className="w-5 h-5 text-green-500" /> : <ChevronRight className="w-5 h-5 text-slate-300" />}
+          {isLoggingIn ? <RefreshCcw className="w-5 h-5 animate-spin text-slate-400" /> : (currentUser && currentUser.isAnonymous ? <ArrowDown01 className="w-5 h-5 text-green-500" /> : <ChevronRight className="w-5 h-5 text-slate-300" />)}
         </button>
 
         <button 
           onClick={handleTeacherClick}
           disabled={isLoggingIn}
-          className="group flex items-center p-5 bg-white rounded-2xl shadow-sm border border-slate-200 active:scale-95 transition-all hover:border-emerald-300 hover:shadow-md"
+          className="group flex items-center p-5 bg-white rounded-2xl shadow-sm border border-slate-200 active:scale-95 transition-all hover:border-emerald-300 hover:shadow-md disabled:bg-slate-50 disabled:cursor-not-allowed"
         >
           <div className="bg-emerald-100 p-3 rounded-full mr-4">
             <GraduationCap className="w-6 h-6 text-emerald-600" />
@@ -509,6 +570,11 @@ function LandingPage({ questionCount, currentUser, onEnterDashboard }) {
           </div>
           {currentUser && !currentUser.isAnonymous ? <ArrowDown01 className="w-5 h-5 text-green-500" /> : <ChevronRight className="w-5 h-5 text-slate-300" />}
         </button>
+
+        {/* 故障排除按鈕 */}
+        <button onClick={handleReset} className="text-xs text-slate-400 hover:text-red-500 flex items-center justify-center gap-1 mt-4">
+            <Power className="w-3 h-3" /> 重置系統狀態
+        </button>
       </div>
 
       {showLoginModal && (
@@ -517,13 +583,13 @@ function LandingPage({ questionCount, currentUser, onEnterDashboard }) {
                 <div className="flex justify-between items-center mb-6">
                     <h3 className="font-bold text-slate-700 flex items-center gap-2 text-lg">
                         <KeyRound className="w-5 h-5 text-emerald-500" />
-                        教師登入
+                        {isRegistering ? '教師註冊' : '教師登入'}
                     </h3>
                     <button onClick={() => setShowLoginModal(false)} className="text-slate-400 hover:text-slate-600 p-1">
                         <XCircle className="w-6 h-6" />
                     </button>
                 </div>
-                <form onSubmit={handleTeacherLogin} className="space-y-4">
+                <form onSubmit={handleAuthSubmit} className="space-y-4">
                     <div>
                         <label className="text-xs font-bold text-slate-500 block mb-1.5 ml-1">Email</label>
                         <input 
@@ -542,8 +608,9 @@ function LandingPage({ questionCount, currentUser, onEnterDashboard }) {
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
                             className="w-full border border-slate-300 rounded-xl px-4 py-3 text-sm outline-none focus:border-emerald-500"
-                            placeholder="輸入密碼"
+                            placeholder="輸入密碼 (至少6位)"
                             required
+                            minLength={6}
                         />
                     </div>
                      
@@ -552,10 +619,23 @@ function LandingPage({ questionCount, currentUser, onEnterDashboard }) {
                     <button 
                         type="submit" 
                         disabled={isLoggingIn}
-                        className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl text-sm flex justify-center items-center gap-2 mt-2 transition-colors shadow-sm"
+                        className={`w-full text-white font-bold py-3 rounded-xl text-sm flex justify-center items-center gap-2 mt-2 transition-colors shadow-sm ${isRegistering ? 'bg-blue-600 hover:bg-blue-700' : 'bg-emerald-600 hover:bg-emerald-700'}`}
                     >
-                        {isLoggingIn ? <RefreshCcw className="w-4 h-4 animate-spin" /> : '確認登入'}
+                        {isLoggingIn ? <RefreshCcw className="w-4 h-4 animate-spin" /> : (isRegistering ? '建立帳號並登入' : '確認登入')}
                     </button>
+
+                    <div className="text-center mt-4">
+                        <button 
+                            type="button"
+                            onClick={() => {
+                                setIsRegistering(!isRegistering);
+                                setErrorMsg('');
+                            }}
+                            className="text-xs text-slate-500 hover:text-indigo-600 underline"
+                        >
+                            {isRegistering ? '已有帳號？返回登入' : '沒有帳號？立即註冊'}
+                        </button>
+                    </div>
                 </form>
             </div>
         </div>
@@ -605,6 +685,28 @@ function StudentManager({ user }) {
         } catch (err) {
             console.error(err);
             alert('新增失敗：' + err.code);
+        }
+    };
+
+    // 新增：一鍵清空所有學生功能
+    const handleClearAllStudents = async () => {
+        if (!students.length) return;
+        if (!window.confirm(`⚠️ 危險操作警告 ⚠️\n\n您即將刪除所有 ${students.length} 位學生的資料。\n\n此動作無法復原！確定要執行嗎？`)) return;
+        
+        // 雙重確認機制，避免手滑
+        if (!window.confirm("再次確認：您真的要清空所有學生名單嗎？\n\n(若只是要清空成績，請到成績頁面操作)")) return;
+
+        setIsImporting(true); // 借用 loading 狀態顯示處理中
+        try {
+            // 由於 firestore 沒有 truncate collection 指令，必須逐筆刪除
+            const promises = students.map(s => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_students', s.id)));
+            await Promise.all(promises);
+            alert("已成功清空所有學生資料");
+        } catch (err) {
+            console.error(err);
+            alert("刪除過程發生錯誤：" + err.message);
+        } finally {
+            setIsImporting(false);
         }
     };
 
@@ -675,8 +777,20 @@ function StudentManager({ user }) {
 
     return (
         <div className="bg-white p-6 rounded-lg shadow">
-            <h3 className="font-bold text-xl mb-4 text-slate-700 flex items-center gap-2">
-                <Users className="w-6 h-6 text-indigo-500"/> 學生名單管理
+            <h3 className="font-bold text-xl mb-4 text-slate-700 flex items-center gap-2 justify-between">
+                <div className="flex items-center gap-2">
+                    <Users className="w-6 h-6 text-indigo-500"/> 學生名單管理
+                </div>
+                {/* 新增：清空按鈕，只在有學生資料時顯示 */}
+                {students.length > 0 && (
+                    <button 
+                        onClick={handleClearAllStudents}
+                        disabled={isImporting}
+                        className="text-xs bg-rose-50 text-rose-600 hover:bg-rose-100 hover:text-rose-700 border border-rose-200 px-3 py-1.5 rounded font-bold flex items-center gap-1 transition shadow-sm"
+                    >
+                        <UserX className="w-4 h-4" /> 清空名單
+                    </button>
+                )}
             </h3>
             
             {permissionError && (

@@ -80,7 +80,8 @@ import {
   Users,
   AlertTriangle,
   Power,
-  UserX
+  UserX,
+  Library
 } from 'lucide-react';
 
 // --- 錯誤邊界元件 ---
@@ -123,7 +124,7 @@ class ErrorBoundary extends React.Component {
   }
 }
 
-// --- Firebase 初始化 (強制具名實例版 - 穩定關鍵) ---
+// --- Firebase 初始化 ---
 const firebaseConfig = {
   apiKey: "AIzaSyCCy_dv6TY4cKHlXKMNYDBOl4HFgjrY_NU",
   authDomain: "quiz-master-final-v2.firebaseapp.com",
@@ -290,7 +291,7 @@ function QuizApp() {
             onClick={goHome}
           >
             <BookOpen className="w-6 h-6" />
-            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v9.3</h1>
+            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v9.4</h1>
             <h1 className="text-xl font-bold tracking-wide sm:hidden">測驗大師</h1>
           </div>
           <div className="flex items-center gap-2">
@@ -708,25 +709,23 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
     }
   }, [activeTab, user]);
 
-  const filteredAndGroupedQuestions = useMemo(() => {
-    let filtered = questions;
-    if (selectedSubject !== '全部') {
-        filtered = questions.filter(q => q.subject === selectedSubject);
-    }
-
-    const grouped = {};
-    filtered.forEach(q => {
-      const vol = q.volume || '未分類';
-      const unit = q.unit || '一般試題';
-      const groupKey = `${vol} | ${unit}`;
-      if (!grouped[groupKey]) grouped[groupKey] = [];
-      grouped[groupKey].push(q);
-    });
+  // 修改重點：建立三層巢狀結構 (科目 -> 冊次 -> 單元)
+  const structuredQuestions = useMemo(() => {
+    const structure = {};
+    const filtered = selectedSubject === '全部' ? questions : questions.filter(q => q.subject === selectedSubject);
     
-    return Object.keys(grouped).sort().reduce((obj, key) => {
-        obj[key] = grouped[key];
-        return obj;
-    }, {});
+    filtered.forEach(q => {
+        const sub = q.subject || '其他';
+        const vol = q.volume || '未分類';
+        const unit = q.unit || '一般試題';
+        
+        if (!structure[sub]) structure[sub] = {};
+        if (!structure[sub][vol]) structure[sub][vol] = {};
+        if (!structure[sub][vol][unit]) structure[sub][vol][unit] = [];
+        
+        structure[sub][vol][unit].push(q);
+    });
+    return structure;
   }, [questions, selectedSubject]);
 
   const resultsByUnit = useMemo(() => {
@@ -753,7 +752,8 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
       return Object.values(bestScores).sort((a, b) => b.score - a.score);
   };
 
-  const toggleUnit = (unit) => setExpandedUnits(p => ({ ...p, [unit]: !p[unit] }));
+  // 修改：使用複合 key 來確保 toggle 正確 (Subject-Volume-Unit)
+  const toggleUnit = (uniqueKey) => setExpandedUnits(p => ({ ...p, [uniqueKey]: !p[uniqueKey] }));
   const toggleResultUnit = (unit) => setExpandedResultUnits(p => ({ ...p, [unit]: !p[unit] }));
 
   const updateThreshold = async () => {
@@ -773,12 +773,12 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
     }
   };
 
-  const handleDeleteFolder = async (groupKey, items) => {
-    if (window.confirm(`確定要刪除「${groupKey}」下所有 ${items.length} 題嗎？`)) {
+  const handleDeleteFolder = async (items) => {
+    if (window.confirm(`確定要刪除「${items.length}」題嗎？`)) {
         try {
             const promises = items.map(item => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_questions', item.id)));
             await Promise.all(promises);
-            alert(`已刪除 ${groupKey}`);
+            alert(`刪除成功`);
         } catch (err) {
             alert("刪除失敗");
         }
@@ -958,56 +958,109 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
       </div>
 
       {activeTab === 'list' && (
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          <div className="p-3 border-b bg-slate-50 flex gap-2 overflow-x-auto">
-              <button onClick={() => setSelectedSubject('全部')} className={`px-3 py-1.5 rounded-full text-sm font-bold ${selectedSubject === '全部' ? 'bg-indigo-600 text-white' : 'bg-white border text-slate-600'}`}>全部</button>
-              {SUBJECTS.map(s => <button key={s} onClick={() => setSelectedSubject(s)} className={`px-3 py-1.5 rounded-full text-sm font-bold ${selectedSubject === s ? 'bg-indigo-600 text-white' : 'bg-white border text-slate-600'}`}>{s}</button>)}
+        <div className="bg-white rounded-lg shadow overflow-hidden p-3 space-y-4">
+          <div className="border-b pb-2 mb-2">
+              <div className="flex gap-2 overflow-x-auto">
+                  <button onClick={() => setSelectedSubject('全部')} className={`px-3 py-1.5 rounded-full text-sm font-bold whitespace-nowrap ${selectedSubject === '全部' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>全部</button>
+                  {SUBJECTS.map(s => <button key={s} onClick={() => setSelectedSubject(s)} className={`px-3 py-1.5 rounded-full text-sm font-bold whitespace-nowrap ${selectedSubject === s ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{s}</button>)}
+              </div>
           </div>
-          <div className="p-3 space-y-3">
-            {Object.entries(filteredAndGroupedQuestions).map(([groupKey, unitQuestions]) => (
-                <div key={groupKey} className="border border-slate-200 rounded-lg bg-slate-50 overflow-hidden">
-                    <div className="p-3 flex justify-between items-center cursor-pointer hover:bg-slate-100 transition" onClick={() => toggleUnit(groupKey)}>
-                        <div className="flex items-center gap-3 text-lg font-bold text-slate-700">
-                            {expandedUnits[groupKey] ? <ChevronDown className="w-5 h-5"/> : <ChevronRight className="w-5 h-5"/>}
-                            <Folder className="w-5 h-5 text-indigo-500" />
-                            {groupKey} <span className="text-sm font-normal bg-white px-2 py-0.5 border rounded-full text-slate-500">{unitQuestions.length}題</span>
-                        </div>
-                        <button onClick={(e) => { e.stopPropagation(); handleDeleteFolder(groupKey, unitQuestions); }} className="text-slate-400 hover:text-red-600 p-2 hover:bg-red-50 rounded-full transition"><FolderX className="w-5 h-5"/></button>
-                    </div>
-                    {expandedUnits[groupKey] && (
-                        <div className="bg-white divide-y divide-slate-100">
-                            {unitQuestions.map((q, idx) => (
-                                <div key={q.id} className="p-3 flex justify-between items-start group hover:bg-indigo-50/50">
-                                    {q.imageUrl && (
-                                        <div className="mr-4 shrink-0">
-                                            <RobustImage 
-                                                src={q.imageUrl} 
-                                                className="w-20 h-20 object-cover rounded border border-slate-200" 
-                                                style={{minHeight: 'auto'}} 
-                                            />
-                                        </div>
-                                    )}
-                                    <div className="flex-1 text-base pr-4">
-                                        <span className="text-indigo-400 font-bold mr-2">#{idx+1}</span>
-                                        {/* 防呆機制：若 q.content 為空，顯示空字串，避免 substring 報錯 */}
-                                        {(q.content || '').substring(0, 40)}{(q.content || '').length > 40 ? '...' : ''}
-                                    </div>
-                                    <div className="flex gap-2">
-                                        <button onClick={() => handleEdit(q)} className="text-slate-400 hover:text-indigo-600 p-2 hover:bg-indigo-100 rounded-lg"><Pencil className="w-5 h-5"/></button>
-                                        <button onClick={() => handleDelete(q.id)} className="text-slate-400 hover:text-red-600 p-2 hover:bg-red-100 rounded-lg"><Trash2 className="w-5 h-5"/></button>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            ))}
-          </div>
+
+          {/* 新版三層結構顯示 (科目 -> 冊次 -> 單元) */}
+          {Object.entries(structuredQuestions).sort().map(([subject, volumes]) => (
+              <div key={subject} className="bg-slate-50 rounded-xl border border-slate-200 overflow-hidden mb-4">
+                  {/* 第一層：科目 */}
+                  <div className="bg-indigo-100 px-4 py-3 border-b border-indigo-200 flex items-center gap-2">
+                      <Library className="w-5 h-5 text-indigo-700" />
+                      <h2 className="text-lg font-bold text-indigo-900">{subject}</h2>
+                  </div>
+                  
+                  <div className="p-2 space-y-3">
+                      {Object.entries(volumes).sort().map(([volume, units]) => (
+                          <div key={volume} className="pl-2 border-l-2 border-slate-300 ml-2">
+                              {/* 第二層：冊次 */}
+                              <div className="flex items-center gap-2 mb-2 mt-1">
+                                  <div className="w-2 h-2 rounded-full bg-slate-400"></div>
+                                  <h3 className="font-bold text-slate-600 text-base">{volume}</h3>
+                              </div>
+
+                              <div className="space-y-2 pl-4">
+                                  {/* 第三層：單元資料夾 */}
+                                  {Object.entries(units).sort().map(([unit, unitQuestions]) => {
+                                      const uniqueKey = `${subject}-${volume}-${unit}`;
+                                      const isExpanded = expandedUnits[uniqueKey];
+                                      
+                                      return (
+                                          <div key={uniqueKey} className="border border-slate-200 rounded-lg bg-white overflow-hidden shadow-sm">
+                                              <div 
+                                                  className="p-3 flex justify-between items-center cursor-pointer hover:bg-slate-50 transition" 
+                                                  onClick={() => toggleUnit(uniqueKey)}
+                                              >
+                                                  <div className="flex items-center gap-3 text-base font-bold text-slate-700">
+                                                      {isExpanded ? <ChevronDown className="w-5 h-5 text-slate-400"/> : <ChevronRight className="w-5 h-5 text-slate-400"/>}
+                                                      <Folder className="w-5 h-5 text-amber-500" />
+                                                      <span>{unit}</span>
+                                                      <span className="text-xs font-normal bg-slate-100 px-2 py-0.5 rounded-full text-slate-500 border">{unitQuestions.length}題</span>
+                                                  </div>
+                                                  <button 
+                                                      onClick={(e) => { e.stopPropagation(); handleDeleteFolder(unitQuestions); }} 
+                                                      className="text-slate-300 hover:text-red-500 p-1.5 hover:bg-red-50 rounded transition"
+                                                      title="刪除此單元所有題目"
+                                                  >
+                                                      <FolderX className="w-4 h-4"/>
+                                                  </button>
+                                              </div>
+                                              
+                                              {/* 展開後的題目列表 */}
+                                              {isExpanded && (
+                                                  <div className="bg-white divide-y divide-slate-100 border-t border-slate-100">
+                                                      {unitQuestions.map((q, idx) => (
+                                                          <div key={q.id} className="p-3 flex justify-between items-start group hover:bg-indigo-50/50">
+                                                              {q.imageUrl && (
+                                                                  <div className="mr-4 shrink-0">
+                                                                      <RobustImage 
+                                                                          src={q.imageUrl} 
+                                                                          className="w-16 h-16 object-cover rounded border border-slate-200" 
+                                                                          style={{minHeight: 'auto'}} 
+                                                                      />
+                                                                  </div>
+                                                              )}
+                                                              <div className="flex-1 text-sm pr-4">
+                                                                  <span className="text-indigo-500 font-bold mr-2">#{idx+1}</span>
+                                                                  {(q.content || '').substring(0, 50)}{(q.content || '').length > 50 ? '...' : ''}
+                                                              </div>
+                                                              <div className="flex gap-1">
+                                                                  <button onClick={() => handleEdit(q)} className="text-slate-400 hover:text-indigo-600 p-2 hover:bg-indigo-50 rounded"><Pencil className="w-4 h-4"/></button>
+                                                                  <button onClick={() => handleDelete(q.id)} className="text-slate-400 hover:text-red-600 p-2 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4"/></button>
+                                                              </div>
+                                                          </div>
+                                                      ))}
+                                                  </div>
+                                              )}
+                                          </div>
+                                      );
+                                  })}
+                              </div>
+                          </div>
+                      ))}
+                  </div>
+              </div>
+          ))}
+          
+          {Object.keys(structuredQuestions).length === 0 && (
+              <div className="text-center p-10 text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-300">
+                  <Folder className="w-12 h-12 mx-auto mb-2 opacity-20" />
+                  <p>目前沒有題目資料</p>
+              </div>
+          )}
         </div>
       )}
 
+      {/* ... rest of the component (add, students, import, results tabs) ... */}
+      {/* (這些部分保持不變，但為了完整性我會包含在下面) */}
       {activeTab === 'add' && (
         <div className="bg-white p-6 rounded-lg shadow">
+          {/* ... Add Form Content ... */}
           <h3 className="font-bold text-xl mb-4 flex items-center gap-2 text-slate-700">
              {editingId ? <Pencil className="w-6 h-6 text-amber-500"/> : <Plus className="w-6 h-6 text-indigo-500"/>} 
              {editingId ? '編輯題目' : '新增題目'}
@@ -1158,6 +1211,7 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
   );
 }
 
+// ... existing code (BulkImport, StudentDashboard, LandingPage, StudentManager) ...
 function LandingPage({ questionCount, currentUser, onEnterDashboard }) {
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [email, setEmail] = useState('');

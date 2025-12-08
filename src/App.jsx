@@ -83,7 +83,8 @@ import {
   Power,
   UserX,
   Library,
-  ImagePlus
+  ImagePlus,
+  Timer
 } from 'lucide-react';
 
 // --- 錯誤邊界元件 ---
@@ -162,6 +163,7 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : 'cloud-quiz-master-v1
 
 const SUBJECTS = ["國文", "英語", "數學", "自然", "地理", "歷史", "公民", "其他"];
 const VOLUMES = ["第一冊", "第二冊", "第三冊", "第四冊", "第五冊", "第六冊", "總複習", "不分冊"];
+const AUTO_LOGOUT_TIME = 60 * 60 * 1000; // 1小時 (毫秒)
 
 const LoadingSpinner = () => (
   <div className="flex flex-col justify-center items-center h-[50dvh] text-indigo-600">
@@ -222,6 +224,40 @@ function QuizApp() {
 
   const leftWindowIdRef = useRef(`win-${Math.random().toString(36).substr(2, 5)}`);
   const rightWindowIdRef = useRef(`win-${Math.random().toString(36).substr(2, 5)}`);
+
+  // --- 閒置自動登出邏輯 (v9.7 新增) ---
+  useEffect(() => {
+    if (!user) return; // 未登入不監控
+
+    let timeoutId;
+
+    const resetTimer = () => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        // 執行登出
+        signOut(auth).then(() => {
+            alert("⚠️ 系統提示\n\n您已閒置超過 1 小時，系統已自動為您登出以確保安全。");
+            window.location.reload(); // 重新整理確保狀態清空
+        }).catch(err => console.error("Auto logout failed", err));
+      }, AUTO_LOGOUT_TIME);
+    };
+
+    // 監聽的事件列表
+    const events = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart'];
+    
+    // 綁定事件
+    events.forEach(event => document.addEventListener(event, resetTimer));
+    
+    // 初始化計時器
+    resetTimer();
+
+    // 清除機制
+    return () => {
+      clearTimeout(timeoutId);
+      events.forEach(event => document.removeEventListener(event, resetTimer));
+    };
+  }, [user]);
+  // ------------------------------------
 
   useEffect(() => {
     if (!auth) {
@@ -304,7 +340,7 @@ function QuizApp() {
             onClick={goHome}
           >
             <BookOpen className="w-6 h-6" />
-            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v9.6</h1>
+            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v9.7</h1>
             <h1 className="text-xl font-bold tracking-wide sm:hidden">測驗大師</h1>
           </div>
           <div className="flex items-center gap-2">

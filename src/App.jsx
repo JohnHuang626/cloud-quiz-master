@@ -84,7 +84,8 @@ import {
   UserX,
   Library,
   ImagePlus,
-  Timer
+  Timer,
+  Images // 新增 Icon
 } from 'lucide-react';
 
 // --- 錯誤邊界元件 ---
@@ -204,10 +205,14 @@ const shuffleQuestionOptions = (question) => {
 
   const newCorrectIndex = indices.indexOf(question.correctIndex);
   
+  // 處理主圖相容性：將舊的 imageUrl 轉為 imageUrls 陣列
+  const effectiveImageUrls = question.imageUrls || (question.imageUrl ? [question.imageUrl] : []);
+
   return { 
       ...question, 
       options: shuffledOptions, 
-      optionImages: shuffledOptionImages, // 回傳洗牌後的圖片陣列
+      optionImages: shuffledOptionImages, 
+      imageUrls: effectiveImageUrls, // 確保前端統一使用 imageUrls 陣列
       correctIndex: newCorrectIndex 
   };
 };
@@ -225,39 +230,31 @@ function QuizApp() {
   const leftWindowIdRef = useRef(`win-${Math.random().toString(36).substr(2, 5)}`);
   const rightWindowIdRef = useRef(`win-${Math.random().toString(36).substr(2, 5)}`);
 
-  // --- 閒置自動登出邏輯 (v9.7 新增) ---
+  // --- 閒置自動登出邏輯 ---
   useEffect(() => {
-    if (!user) return; // 未登入不監控
+    if (!user) return; 
 
     let timeoutId;
 
     const resetTimer = () => {
       clearTimeout(timeoutId);
       timeoutId = setTimeout(() => {
-        // 執行登出
         signOut(auth).then(() => {
             alert("⚠️ 系統提示\n\n您已閒置超過 1 小時，系統已自動為您登出以確保安全。");
-            window.location.reload(); // 重新整理確保狀態清空
+            window.location.reload(); 
         }).catch(err => console.error("Auto logout failed", err));
       }, AUTO_LOGOUT_TIME);
     };
 
-    // 監聽的事件列表
     const events = ['mousedown', 'mousemove', 'keypress', 'scroll', 'touchstart'];
-    
-    // 綁定事件
     events.forEach(event => document.addEventListener(event, resetTimer));
-    
-    // 初始化計時器
     resetTimer();
 
-    // 清除機制
     return () => {
       clearTimeout(timeoutId);
       events.forEach(event => document.removeEventListener(event, resetTimer));
     };
   }, [user]);
-  // ------------------------------------
 
   useEffect(() => {
     if (!auth) {
@@ -340,7 +337,7 @@ function QuizApp() {
             onClick={goHome}
           >
             <BookOpen className="w-6 h-6" />
-            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v9.7</h1>
+            <h1 className="text-xl font-bold tracking-wide hidden sm:block">雲端測驗大師 v9.8</h1>
             <h1 className="text-xl font-bold tracking-wide sm:hidden">測驗大師</h1>
           </div>
           <div className="flex items-center gap-2">
@@ -938,9 +935,10 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
     unit: '',
     content: '',
     options: ['', '', '', ''],
-    optionImages: [null, null, null, null], // 新增：選項圖片陣列
+    optionImages: [null, null, null, null], 
     correctIndex: 0,
-    imageUrl: '',
+    imageUrl: '', // 舊欄位保留 (向下相容)
+    imageUrls: [], // 新增：多張主圖陣列
     rationale: '' 
   });
    
@@ -1017,23 +1015,23 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
       }
   };
 
+  // 修改：刪除支援多圖 + 選項圖
   const handleDelete = async (q) => {
     if (!window.confirm('確定刪除？')) return;
 
-    // 刪除主圖
-    if (q.imageUrl) {
-        try {
-            await deleteObject(ref(storage, q.imageUrl));
-        } catch (e) { console.warn("Image delete failed", e); }
+    // 刪除所有主圖 (imageUrls + 舊 imageUrl)
+    const imagesToDelete = [...(q.imageUrls || [])];
+    if (q.imageUrl) imagesToDelete.push(q.imageUrl);
+
+    for (const url of imagesToDelete) {
+        try { await deleteObject(ref(storage, url)); } catch (e) { console.warn("Main img delete fail", e); }
     }
 
-    // 刪除選項圖片
+    // 刪除選項圖
     if (q.optionImages) {
-        for (const imgUrl of q.optionImages) {
-            if (imgUrl) {
-                try {
-                    await deleteObject(ref(storage, imgUrl));
-                } catch (e) { console.warn("Opt img delete failed", e); }
+        for (const url of q.optionImages) {
+            if (url) {
+                try { await deleteObject(ref(storage, url)); } catch (e) { console.warn("Opt img delete fail", e); }
             }
         }
     }
@@ -1044,16 +1042,17 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
   const handleDeleteFolder = async (items) => {
     if (window.confirm(`確定要刪除「${items.length}」題嗎？`)) {
         try {
-            const deletePromises = items.map(async (item) => {
-                // 刪除圖片
-                if (item.imageUrl) await deleteObject(ref(storage, item.imageUrl)).catch(e=>console.warn(e));
-                if (item.optionImages) {
-                    for(const url of item.optionImages) {
-                        if(url) await deleteObject(ref(storage, url)).catch(e=>console.warn(e));
-                    }
+            const deletePromises = items.map(async (q) => {
+                // 刪除所有相關圖片
+                const imagesToDelete = [...(q.imageUrls || [])];
+                if (q.imageUrl) imagesToDelete.push(q.imageUrl);
+                if (q.optionImages) q.optionImages.forEach(url => { if(url) imagesToDelete.push(url) });
+
+                for (const url of imagesToDelete) {
+                     try { await deleteObject(ref(storage, url)); } catch (e) {}
                 }
                 // 刪除文件
-                return deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_questions', item.id));
+                return deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'quiz_questions', q.id));
             });
             
             await Promise.all(deletePromises);
@@ -1073,31 +1072,42 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
           options: q.options || ['', '', '', ''],
           optionImages: q.optionImages || [null, null, null, null],
           correctIndex: q.correctIndex || 0,
-          imageUrl: q.imageUrl || '',
+          imageUrl: '', // 編輯模式下清空舊單圖欄位，轉移至 imageUrls
+          imageUrls: q.imageUrls || (q.imageUrl ? [q.imageUrl] : []), // 相容性處理
           rationale: q.rationale || ''
       });
       setEditingId(q.id);
       setActiveTab('add');
   };
 
-  const handleImageUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    setIsUploading(true);
-    try {
-        const fileName = `${Date.now()}_main_${file.name}`;
-        const storageRef = ref(storage, `artifacts/${appId}/public/images/${fileName}`);
-        await uploadBytes(storageRef, file);
-        const downloadUrl = await getDownloadURL(storageRef);
-        setNewQuestion({ ...newQuestion, imageUrl: downloadUrl });
-    } catch (error) {
-        alert("上傳失敗");
-    } finally {
-        setIsUploading(false);
-    }
+  // 修改：上傳主圖 (支援多張)
+  const handleMainImageUpload = async (file) => {
+      if (!file) return;
+      setIsUploading(true);
+      try {
+          const fileName = `${Date.now()}_main_${file.name}`;
+          const storageRef = ref(storage, `artifacts/${appId}/public/images/${fileName}`);
+          await uploadBytes(storageRef, file);
+          const downloadUrl = await getDownloadURL(storageRef);
+          
+          setNewQuestion(prev => ({
+              ...prev,
+              imageUrls: [...prev.imageUrls, downloadUrl]
+          }));
+      } catch (error) {
+          alert("上傳失敗");
+      } finally {
+          setIsUploading(false);
+      }
   };
 
-  // 處理選項圖片上傳
+  const handleRemoveMainImage = (indexToRemove) => {
+      setNewQuestion(prev => ({
+          ...prev,
+          imageUrls: prev.imageUrls.filter((_, idx) => idx !== indexToRemove)
+      }));
+  };
+
   const handleOptionImageUpload = async (index, file) => {
       if (!file) return;
       setIsUploading(true);
@@ -1117,7 +1127,6 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
       }
   };
 
-  // 移除選項圖片
   const handleRemoveOptionImage = (index) => {
       const updatedOptionImages = [...newQuestion.optionImages];
       updatedOptionImages[index] = null;
@@ -1129,9 +1138,11 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
     if (!newQuestion.content || newQuestion.options.some(opt => !opt) || !newQuestion.unit) return alert("資料不完整");
     
     try {
-      // 確保 optionImages 存在
       const data = { 
           ...newQuestion, 
+          // 確保寫入時同時寫入新舊欄位以保持最大相容性
+          imageUrl: newQuestion.imageUrls[0] || '', 
+          imageUrls: newQuestion.imageUrls,
           optionImages: newQuestion.optionImages || [null, null, null, null],
           updatedAt: serverTimestamp() 
       };
@@ -1146,14 +1157,15 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
           alert("新增成功");
       }
       setNewQuestion({ 
-          subject: newQuestion.subject, // 保留上次選擇的科目
-          volume: newQuestion.volume,   // 保留上次選擇的冊次
-          unit: newQuestion.unit,       // 保留上次輸入的單元
+          subject: newQuestion.subject,
+          volume: newQuestion.volume, 
+          unit: newQuestion.unit, 
           content: '', 
           options: ['','','',''], 
           optionImages: [null, null, null, null],
           correctIndex: 0,
-          imageUrl: '', 
+          imageUrl: '',
+          imageUrls: [],
           rationale: '' 
       });
       setEditingId(null);
@@ -1223,7 +1235,7 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
             ${result.mistakes.map((m, idx) => `
               <div class="question">
                 <div class="q-content">${idx + 1}. ${m.content}</div>
-                ${m.imageUrl ? `<img src="${m.imageUrl}" alt="題目附圖" />` : ''}
+                ${(m.imageUrls || [m.imageUrl]).filter(u=>u).map(u => `<img src="${u}" alt="題目附圖" />`).join('')}
                 <div class="options">
                     ${m.options.map((opt, i) => `
                         <div class="option">
@@ -1342,15 +1354,16 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
                                                   <div className="bg-white divide-y divide-slate-100 border-t border-slate-100">
                                                       {unitQuestions.map((q, idx) => (
                                                           <div key={q.id} className="p-3 flex justify-between items-start group hover:bg-indigo-50/50">
-                                                              {q.imageUrl && (
-                                                                  <div className="mr-4 shrink-0">
+                                                              <div className="mr-4 shrink-0 flex flex-col gap-1">
+                                                                  {(q.imageUrls || (q.imageUrl ? [q.imageUrl] : [])).map((url, imgIdx) => (
                                                                       <RobustImage 
-                                                                          src={q.imageUrl} 
+                                                                          key={imgIdx}
+                                                                          src={url} 
                                                                           className="w-16 h-16 object-cover rounded border border-slate-200" 
                                                                           style={{minHeight: 'auto'}} 
                                                                       />
-                                                                  </div>
-                                                              )}
+                                                                  ))}
+                                                              </div>
                                                               <div className="flex-1 text-sm pr-4">
                                                                   <span className="text-indigo-500 font-bold mr-2">#{idx+1}</span>
                                                                   {(q.content || '').substring(0, 50)}{(q.content || '').length > 50 ? '...' : ''}
@@ -1410,11 +1423,32 @@ function TeacherDashboard({ questions, globalSettings, userId, windowId, user, a
                 <textarea value={newQuestion.content} onChange={e => setNewQuestion({...newQuestion, content: e.target.value})} className="w-full border p-3 rounded-lg text-base h-32 outline-none focus:ring-2 focus:ring-indigo-500" placeholder="請輸入題目敘述..." />
             </div>
 
+            {/* 多圖上傳區塊 */}
             <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
-                <label className="block text-sm font-bold text-slate-500 mb-2 flex items-center gap-1"><ImageIcon className="w-4 h-4"/> 附圖 (選填)</label>
+                <label className="block text-sm font-bold text-slate-500 mb-2 flex items-center gap-1"><Images className="w-4 h-4"/> 題目附圖 (可多張)</label>
+                
+                {/* 顯示已上傳圖片列表 */}
+                <div className="flex gap-2 flex-wrap mb-3">
+                    {newQuestion.imageUrls.map((url, idx) => (
+                        <div key={idx} className="relative group">
+                            <img src={url} alt={`附圖 ${idx+1}`} className="w-20 h-20 object-cover rounded border border-slate-300" />
+                            <button 
+                                type="button" 
+                                onClick={() => handleRemoveMainImage(idx)}
+                                className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-sm opacity-0 group-hover:opacity-100 transition"
+                            >
+                                <X className="w-3 h-3" />
+                            </button>
+                        </div>
+                    ))}
+                </div>
+
                 <div className="flex gap-2 items-center">
-                    <input type="file" ref={fileInputRef} onChange={handleImageUpload} className="text-sm w-full text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100" disabled={isUploading}/>
-                    {newQuestion.imageUrl && <span className="text-sm text-green-600 font-bold flex items-center gap-1 bg-green-50 px-2 py-1 rounded"><CheckCircle className="w-4 h-4"/>已上傳</span>}
+                    <label className="cursor-pointer bg-white text-indigo-600 border border-indigo-200 hover:bg-indigo-50 px-4 py-2 rounded-lg text-sm font-bold shadow-sm transition flex items-center gap-2">
+                        <ImagePlus className="w-4 h-4" /> 新增圖片
+                        <input type="file" hidden onChange={(e) => handleMainImageUpload(e.target.files[0])} disabled={isUploading}/>
+                    </label>
+                    {isUploading && <span className="text-xs text-slate-400 animate-pulse">上傳中...</span>}
                 </div>
             </div>
 
@@ -1743,7 +1777,19 @@ function StudentDashboard({ questions, globalSettings, windowId, user, appId }) 
           {quizQs.map((q, i) => (
               <div key={q.id} className="bg-white p-4 rounded shadow">
                   <div className="font-bold mb-2 text-lg"><span className="text-indigo-500">{i+1}.</span> {q.content}</div>
-                  {q.imageUrl && <RobustImage src={q.imageUrl} className="max-h-48 mb-2 rounded" />}
+                  
+                  {/* 顯示題目多張主圖 */}
+                  {q.imageUrls && q.imageUrls.length > 0 ? (
+                      <div className="flex flex-wrap gap-2 mb-2">
+                          {q.imageUrls.map((url, imgIdx) => (
+                              <RobustImage key={imgIdx} src={url} className="max-h-48 rounded border border-slate-200" />
+                          ))}
+                      </div>
+                  ) : q.imageUrl && (
+                       // 相容舊資料
+                       <RobustImage src={q.imageUrl} className="max-h-48 mb-2 rounded" />
+                  )}
+
                   <div className="space-y-2">
                       {q.options.map((opt, idx) => (
                           <label key={idx} className={`flex items-center gap-2 p-3 border rounded cursor-pointer ${ans[q.id]===idx?'bg-indigo-50 border-indigo-500':''}`}>
@@ -1795,7 +1841,17 @@ function StudentDashboard({ questions, globalSettings, windowId, user, appId }) 
                       return (
                           <div key={q.id} className={`p-4 bg-white rounded border-l-4 ${isRight?'border-green-500':'border-red-500'}`}>
                               <div className="font-bold mb-1">{i+1}. {q.content}</div>
-                              {q.imageUrl && <RobustImage src={q.imageUrl} className="h-20 mb-2 rounded" />}
+                              {/* 顯示題目多張主圖 */}
+                              {q.imageUrls && q.imageUrls.length > 0 ? (
+                                  <div className="flex flex-wrap gap-2 mb-2">
+                                      {q.imageUrls.map((url, imgIdx) => (
+                                          <RobustImage key={imgIdx} src={url} className="h-20 rounded border border-slate-200" />
+                                      ))}
+                                  </div>
+                              ) : q.imageUrl && (
+                                   <RobustImage src={q.imageUrl} className="h-20 mb-2 rounded" />
+                              )}
+
                               {!isRight && (
                                   <div className="text-red-500 text-sm mb-1">
                                       你的答案: {q.options[ans[q.id]]}
